@@ -1,0 +1,71 @@
+/**
+ * DesignTokens（ADR-0005）：线条 + 暖色基调的全局唯一色值来源。
+ * 后续所有组件只引用这里的 CSS 变量，不出现硬编码色值。
+ */
+
+:root {
+  /* 背景 */
+  --bg-base: #ffffff; /* 页面底 */
+  --bg-group: #fafaf9; /* stone-50 分组 */
+  --bg-accent-group: #fff7ed; /* orange-50 强调分组 */
+  --surface: #ffffff;
+
+  /* 边框与强调条（线条为骨） */
+  --border-default: 1px solid #f5f5f4; /* stone-100 */
+  --border-active: 1px solid #fb923c; /* orange-400 */
+  --bar-active: 3px solid #fb923c; /* 顶部选中条 */
+
+  /* 主色（暖橙）与状态色三档 */
+  --primary: #fb923c; /* orange-400 */
+  --primary-hover: #f97316; /* orange-500 */
+  --color-done: #16a34a; /* green-600 完成 */
+  --color-progress: #d97706; /* amber-600 进行 */
+  --color-danger: #dc2626; /* red-600 警示 */
+
+  /* 文字三档 */
+  --text-primary: #1c1917; /* stone-800 */
+  --text-secondary: #57534e; /* stone-600 */
+  --text-muted: #a8a29e; /* stone-400 */
+
+  /* 阴影仅浮层 */
+  --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.05);
+
+  /* 圆角只用 8 / 12 / 16 */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+
+  /* 字体栈（中文 fallback 按 token 表） */
+  --font-stack: Inter, "SF Pro", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-stack);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* 无边框透明窗口（桌宠 / 小看板）需要透明根背景 */
+body.transparent-root {
+  background: transparent;
+}
+
+/* 通用工具类（全局复用，组件不再 scoped 重复定义） */
+.hint {
+  color: var(--text-muted);
+}
+
+.page-title {
+  margin: 0 0 8px;
+  font-size: 16px;
+  color: var(--text-primary);
+}

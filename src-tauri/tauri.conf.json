@@ -12,9 +12,45 @@
   "app": {
     "windows": [
       {
-        "title": "plan-helper",
-        "width": 800,
-        "height": 600
+        "label": "pet",
+        "title": "Oreo",
+        "width": 160,
+        "height": 160,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false
+      },
+      {
+        "label": "mini-board",
+        "title": "小看板",
+        "width": 320,
+        "height": 220,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false
+      },
+      {
+        "label": "main-board",
+        "title": "今日分配",
+        "width": 780,
+        "height": 680,
+        "center": true,
+        "visible": false
+      },
+      {
+        "label": "control-panel",
+        "title": "控制面板",
+        "width": 1080,
+        "height": 720,
+        "minWidth": 880,
+        "minHeight": 600
       }
     ],
     "security": {
