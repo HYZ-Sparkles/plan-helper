@@ -4,7 +4,7 @@
 
 背景：spec 用户故事 23–29；术语 MainBoardTodayAllocation / TodayLoadCommitment / AutoOpenMainBoard / TaskDependency；硬约束语义见 CONTEXT（推进硬性、完成柔性、选择层面超额不抵扣）。
 
-**Blocked by:** 04 依赖编辑, 05 计划生命周期
+**Blocked by:** 04 子目标与依赖, 05 计划生命周期
 
 **Status:** ready-for-agent
 
