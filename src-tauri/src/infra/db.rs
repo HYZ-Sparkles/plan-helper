@@ -32,4 +32,30 @@ CREATE TABLE IF NOT EXISTS settings (
     smoothing_workdays INTEGER NOT NULL,           -- 均分窗口（工作日数）
     updated_at         TEXT    NOT NULL DEFAULT ''-- 最近一次保存（RFC3339）
 );
+
+CREATE TABLE IF NOT EXISTS plans (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT NOT NULL,
+    summary      TEXT NOT NULL,                    -- 留空落库时已回退为名称
+    detail       TEXT NOT NULL DEFAULT '',
+    priority     TEXT NOT NULL DEFAULT 'Medium',   -- Low | Medium | High
+    due_date     TEXT,                             -- 仅展示，YYYY-MM-DD
+    status       TEXT NOT NULL DEFAULT 'NotStarted',
+    created_at   TEXT NOT NULL,                    -- RFC3339
+    sort_override INTEGER                           -- 手动排序（工单 05），NULL = 默认排序
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id           INTEGER NOT NULL REFERENCES plans(id),
+    name              TEXT NOT NULL,
+    summary           TEXT NOT NULL,
+    detail            TEXT NOT NULL DEFAULT '',
+    has_subgoals      INTEGER NOT NULL DEFAULT 0,  -- 0/1
+    estimated_minutes INTEGER,                     -- 无子目标任务必填；有子目标=子目标和
+    position          INTEGER NOT NULL,            -- 计划内顺序
+    status            TEXT NOT NULL DEFAULT 'NotStarted',
+    deleted_at        TEXT,                        -- 软删除（非 NULL = 已归档）
+    created_at        TEXT NOT NULL
+);
 ";

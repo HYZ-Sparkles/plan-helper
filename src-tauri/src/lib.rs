@@ -28,7 +28,11 @@ pub fn run() {
             position_pet(app)?;
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![commands::get_app_state])
+        .invoke_handler(tauri::generate_handler![
+            commands::get_app_state,
+            commands::create_plan,
+            commands::list_plans
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

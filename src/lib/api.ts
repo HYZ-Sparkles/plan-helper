@@ -28,3 +28,74 @@ export interface AppStateView {
 export function getAppState(): Promise<AppStateView> {
   return invoke<AppStateView>("get_app_state");
 }
+
+/* ---- 计划领域（工单 02+）---- */
+
+/** 优先级枚举（CONTEXT「优先级」） */
+export type Priority = "Low" | "Medium" | "High";
+
+/** 计划状态（ADR-0001 单向瀑布） */
+export type PlanStatus = "NotStarted" | "Active" | "Paused" | "Completed" | "Abandoned";
+
+/** 任务状态 */
+export type TaskStatus = "NotStarted" | "Active" | "Completed";
+
+/** 创建任务入参（对应 domain::plans::NewTask） */
+export interface NewTask {
+  name: string;
+  summary?: string;
+  detail?: string;
+  has_subgoals?: boolean;
+  estimated_minutes?: number;
+}
+
+/** 创建计划入参（对应 domain::plans::NewPlan） */
+export interface NewPlan {
+  name: string;
+  summary?: string;
+  detail?: string;
+  priority: Priority;
+  due_date?: string | null;
+  tasks: NewTask[];
+}
+
+/** 任务视图（对应 domain::plans::TaskView） */
+export interface TaskView {
+  id: number;
+  name: string;
+  summary: string;
+  detail: string;
+  has_subgoals: boolean;
+  estimated_minutes: number | null;
+  position: number;
+  status: TaskStatus;
+}
+
+/** 计划视图（对应 domain::plans::PlanView，含嵌套任务） */
+export interface PlanView {
+  id: number;
+  name: string;
+  summary: string;
+  detail: string;
+  priority: Priority;
+  due_date: string | null;
+  status: PlanStatus;
+  created_at: string;
+  tasks: TaskView[];
+}
+
+/** 领域错误（对应 domain::plans::PlanError 的序列化形态 {kind, payload}） */
+export interface PlanErrorShape {
+  kind: string;
+  payload?: unknown;
+}
+
+/** 创建计划（含任务），返回新计划 id */
+export function createPlan(plan: NewPlan): Promise<number> {
+  return invoke<number>("create_plan", { new: plan });
+}
+
+/** 计划列表（PlanOrdering 默认排序，含嵌套任务） */
+export function listPlans(): Promise<PlanView[]> {
+  return invoke<PlanView[]>("list_plans");
+}

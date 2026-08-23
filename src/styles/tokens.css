@@ -37,6 +37,14 @@
 
   /* 字体栈（中文 fallback 按 token 表） */
   --font-stack: Inter, "SF Pro", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+
+  /* 优先级视觉（CONTEXT PriorityVisuals 表：边条/图标色 + 标签底色） */
+  --priority-high: #dc2626; /* red-600 */
+  --priority-high-bg: #fee2e2; /* red-100 */
+  --priority-medium: #3b82f6; /* blue-500 */
+  --priority-medium-bg: #dbeafe; /* blue-100 */
+  --priority-low: #94a3b8; /* slate-400 */
+  --priority-low-bg: #f1f5f9; /* slate-100 */
 }
 
 html,
@@ -68,4 +76,42 @@ body.transparent-root {
   margin: 0 0 8px;
   font-size: 16px;
   color: var(--text-primary);
+}
+
+/* 单行文本输入（input / textarea 共用形态） */
+.input {
+  padding: 7px 10px;
+  border: var(--border-default);
+  border-radius: var(--radius-sm);
+  font: inherit;
+  color: var(--text-primary);
+  background: var(--surface);
+}
+
+.input:focus {
+  outline: none;
+  border: var(--border-active);
+}
+
+/* 主操作按钮（创建计划 / 确认 等带文字的主按钮，IconFont 例外保留文字） */
+.primary-btn {
+  display: inline-block;
+  padding: 9px 24px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--primary);
+  color: var(--bg-base);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.primary-btn:hover {
+  background: var(--primary-hover);
+}
+
+.primary-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }

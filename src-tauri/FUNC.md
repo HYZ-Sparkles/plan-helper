@@ -22,6 +22,11 @@
 
 ## 领域服务（src/domain/）
 
+- `plans::PlanService`（工单 02+）
+  - `create(conn, clock, &NewPlan) -> Result<i64, PlanError>` — 事务写入计划+任务；简述留空回退名称（`default_text`）；校验：名称非空、≥1 任务、无子目标任务必填耗时、勾子目标须有子目标（03 前必拒）
+  - `list(conn) -> Result<Vec<PlanView>, PlanError>` — 全部计划+嵌套任务（软删除过滤），PlanOrdering 默认排序：Priority 降序 → CreatedAt 倒序 → id 倒序；错误与 create 同走 PlanError 通道
+  - `PlanError` — 结构化领域错误（serde tag=kind/content=payload），前端文案见 `src/lib/labels.ts#planErrorMessage`
+  - `Priority` / `PlanStatus` / `TaskStatus` — 枚举 + `as_db`/`from_db` TEXT 往返；Priority 派生 Ord（Low < Medium < High）
 - `settings::SettingsService`
   - `load(conn) -> Settings` — 读取设置；FirstRun 自动落默认值（300 分钟/天、周一至五、均分 7 工作日；窗口默认 09:00–18:00 一段）
   - `save(conn, clock, &Settings)` — 覆盖保存，updated_at 取注入时钟
@@ -32,8 +37,12 @@
 ## Tauri command（src/commands.rs）
 
 - `get_app_state` — 返回 `AppStateView`（设置 + 服务端时间）；前端包装 `src/lib/api.ts#getAppState`
+- `create_plan(new: NewPlan) -> Result<i64, PlanError>` — 前端 `createPlan`
+- `list_plans() -> Vec<PlanView>` — 前端 `listPlans`
 
-## 测试先例（tests/seam_settings.rs）
+## 测试先例（tests/）
 
+- `seam_settings.rs` — FirstRun 默认值 / 保存往返 / 快照组装
+- `seam_plans.rs` — 创建校验（空任务/缺耗时/空名/子目标必拒）、持久化字段回读、PlanOrdering 排序、文件库重开不丢
 - 直接 `db::open_in_memory()` + `FixedClock` 驱动领域服务，断言可观察输出
 - 每个测试注明：测试什么情况、什么结果才算正确（仓库规范）
