@@ -469,7 +469,7 @@ function onLinePointerUp(e: PointerEvent) {
   suppressClick = true;
   drag.dy = slotCenters[drag.drop] - slotCenters[drag.index]; // 目标：滑入预览槽位
   drag.settling = true; // 跟手时无过渡，此刻起开启过渡
-  settleTimer = window.setTimeout(commitDrop, 170);
+  settleTimer = window.setTimeout(commitDrop, 200); // 略长于 160ms 滑入，避免截尾微跳
 }
 
 /** 拖拽收尾：数组落位（key 稳定，DOM 随之移动到与视觉一致的位置）并复位会话 */
@@ -811,10 +811,13 @@ async function save() {
   border-radius: var(--radius-md);
   background: var(--bg-group);
   overflow: hidden;
-  transition: transform 0.15s; /* 他卡让位/合拢与松手归位的流动感 */
+  /* 落位后回实/收条平滑；transform 的过渡绝不能放这——commitDrop 清位移时若仍有
+     transition，浏览器会把"位移→无位移"动画化，卡片弹回旧位置再滑回来（闪动） */
+  transition: opacity 0.15s, box-shadow 0.15s;
 }
 
-/* 拖拽进行中：整列表禁选中、摘要行变抓取光标 */
+/* 拖拽进行中：整列表禁选中、摘要行变抓取光标；transform 过渡只在这段生效——
+   落位帧 drag-live 与位移同帧移除，"变化后样式"无 transition 即不播动画，直接吸附到位 */
 .tasks.drag-live {
   user-select: none;
 }
@@ -823,16 +826,24 @@ async function save() {
   cursor: grabbing;
 }
 
+/* 他卡让位/合拢的流动感 */
+.tasks.drag-live .task-card {
+  transition: transform 0.15s, opacity 0.15s, box-shadow 0.15s;
+}
+
 /* 被拖卡：半透明 + 顶部 3px 主色条；跟手位移不能有过渡（会滞后于指针） */
 .task-card.dragging {
   opacity: 0.5;
   box-shadow: inset 0 3px 0 var(--primary);
-  transition: none;
   z-index: 10;
 }
 
+.tasks.drag-live .task-card.dragging {
+  transition: none;
+}
+
 /* 松手后：被拖卡以过渡滑入预览槽位，随后 commitDrop 落定 */
-.task-card.settling {
+.tasks.drag-live .task-card.settling {
   transition: transform 0.16s ease-out;
 }
 
