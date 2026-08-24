@@ -93,6 +93,8 @@ export interface TaskView {
   subgoals: SubGoalView[];
   /** 前置任务 id（同计划内） */
   prerequisite_ids: number[];
+  /** 派生进度百分比（0–100）：无子目标任务的汇报进度也在这里（工单 07 接线） */
+  progress_percent: number;
 }
 
 /** 暂停原因（CONTEXT PauseReason 二值；AutoPreempted 由工单 12 抢占写入） */
@@ -216,4 +218,74 @@ export function getAllocationBoard(): Promise<AllocationBoardView> {
 /** 提交当日分配（覆盖重选）；不可选任务由服务层兜底拒绝 */
 export function commitTodayAllocation(taskIds: number[]): Promise<void> {
   return invoke<void>("commit_today_allocation", { taskIds });
+}
+
+/* ---- 进度汇报（工单 07）：账本与派生在 domain::progress ---- */
+
+/** 当前任务的展示视图（对应 domain::progress::CurrentTaskView；
+ *  status = Completed 是"任务完成"停留态，不自动切换下一个） */
+export interface CurrentTaskView {
+  task_id: number;
+  plan_id: number;
+  plan_name: string;
+  task_name: string;
+  status: TaskStatus;
+  /** 是否有子目标（决定小看板走勾选还是百分比控件） */
+  has_subgoals: boolean;
+  /** 派生进度百分比（0–100，ADR-0002） */
+  percent: number;
+  completed_minutes: number;
+  total_minutes: number;
+  /** 全部子目标（按填写顺序；有子目标任务才有内容） */
+  subgoals: SubGoalView[];
+}
+
+/** 更换任务候选的一个计划分组（对应 domain::progress::PickerGroup；
+ *  服务端已把当前任务同计划排最前） */
+export interface PickerGroup {
+  plan_id: number;
+  plan_name: string;
+  priority: Priority;
+  tasks: { id: number; name: string }[];
+}
+
+/** 小看板一次装配的完整视图（对应 domain::progress::MiniBoardView） */
+export interface MiniBoardView {
+  /** null = 空态：未指定当前任务 / 计划暂停 / 已移出今日列表 */
+  current: CurrentTaskView | null;
+  /** 今日完成量（分钟，按工作窗口开始日归属） */
+  today_minutes: number;
+  /** 当日实际目标（分钟）。工单 07 = 基准；工单 10 升级为含结转 */
+  target_minutes: number;
+  pickers: PickerGroup[];
+}
+
+/** 小看板视图：当前任务 + 今日完成量 + 当日目标 + 更换候选 */
+export function getMiniBoard(): Promise<MiniBoardView> {
+  return invoke<MiniBoardView>("get_mini_board");
+}
+
+/** 指定当前任务（须在今日推进列表内且可推进，服务层兜底校验） */
+export function setCurrentTask(taskId: number): Promise<void> {
+  return invoke<void>("set_current_task", { taskId });
+}
+
+/** 按序完成一个子目标（乱序由服务层拒绝） */
+export function completeSubgoal(subgoalId: number): Promise<void> {
+  return invoke<void>("complete_subgoal", { subgoalId });
+}
+
+/** 撤销最后一个已完成的子目标（补偿账，进度实时重算） */
+export function undoSubgoal(subgoalId: number): Promise<void> {
+  return invoke<void>("undo_subgoal", { subgoalId });
+}
+
+/** 无子目标任务增量汇报 +percent%（5–100 的 5 倍数，累计不超 100%） */
+export function reportPercent(taskId: number, percent: number): Promise<void> {
+  return invoke<void>("report_percent", { taskId, percent });
+}
+
+/** 修正总进度（直接设定当前值 0–100 的 5 倍数；仅无子目标任务） */
+export function correctTotalProgress(taskId: number, percent: number): Promise<void> {
+  return invoke<void>("correct_total_progress", { taskId, percent });
 }

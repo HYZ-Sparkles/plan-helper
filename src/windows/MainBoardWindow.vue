@@ -60,13 +60,11 @@
           今日累计 <b>{{ hoursLabel(accumulatedMinutes) }}</b> 小时
           <span class="status-sep">/</span> 目标 {{ hoursFromMinutes(board.target_minutes) }} 小时
         </p>
-        <div class="bar">
-          <div
-            class="fill"
-            :class="{ reached: accumulatedMinutes >= board.target_minutes }"
-            :style="{ width: barWidth }"
-          ></div>
-        </div>
+        <MicroBar
+          class="status-bar"
+          :ratio="accumulatedMinutes / board.target_minutes"
+          :reached="accumulatedMinutes >= board.target_minutes"
+        />
       </div>
 
       <!-- 中：确认（底部中间，点击持久化并隐藏窗口） -->
@@ -85,14 +83,15 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { emitTo, listen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   PhCheck,
   PhCoffee,
   PhFlag,
   PhMoonStars,
 } from "@phosphor-icons/vue";
+import MicroBar from "../components/MicroBar.vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
 import {
   commitTodayAllocation,
@@ -125,13 +124,6 @@ const shortfallMinutes = computed(() => {
   return Math.max(0, target - accumulatedMinutes.value);
 });
 
-/** 进度条宽度：达到目标即满格（超出不再延伸，超额是正常状态） */
-const barWidth = computed(() => {
-  const target = board.value?.target_minutes ?? 0;
-  if (target === 0) return "0%";
-  return `${Math.min(100, (accumulatedMinutes.value / target) * 100)}%`;
-});
-
 /** 日期文案（"8月24日 星期一"）——从服务端给的归属日解析，避免本地时区漂移 */
 const dateLabel = computed(() => {
   const raw = board.value?.date;
@@ -161,6 +153,9 @@ async function confirm() {
   try {
     await commitTodayAllocation(selected.value);
     commitError.value = "";
+    // 分配落定 → 唤醒小看板（先发刷新事件再显示，窗口读到的是最新视图）
+    await emitTo("mini-board", "mini-board:refresh");
+    (await WebviewWindow.getByLabel("mini-board"))?.show();
     await win.hide(); // 关闭 = 隐藏（CONTEXT 窗口关闭语义），重开入口在控制面板
   } catch (err) {
     commitError.value = planErrorMessage(err as PlanErrorShape);
@@ -353,25 +348,9 @@ onMounted(async () => {
   color: var(--text-muted);
 }
 
-/* 微型进度条：未达标记进行色（黄系软提示），达标转完成色。
-   圆角取 --radius-sm，浏览器按 4px 高自动钳到半高胶囊（token 表无亚 8px 档） */
-.bar {
+/* 微型进度条（组件本体在 MicroBar，这里只定宽） */
+.status-bar {
   width: 220px;
-  height: 4px;
-  border-radius: var(--radius-sm);
-  background: var(--border-default);
-  overflow: hidden;
-}
-
-.fill {
-  height: 100%;
-  border-radius: var(--radius-sm);
-  background: var(--color-progress);
-  transition: width 0.2s;
-}
-
-.fill.reached {
-  background: var(--color-done);
 }
 
 .confirm {

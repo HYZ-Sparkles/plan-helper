@@ -8,6 +8,7 @@ use crate::domain::allocation::{AllocationBoardView, AllocationService};
 use crate::domain::app_state::{app_state_view, AppStateView};
 use crate::domain::lifecycle::LifecycleService;
 use crate::domain::plans::{PlanDraft, PlanError, PlanService, PlanView};
+use crate::domain::progress::{MiniBoardView, ProgressService};
 
 /// 示例接缝命令：UI → command → 领域服务 → 返回。
 #[tauri::command]
@@ -119,4 +120,65 @@ pub fn commit_today_allocation(
 ) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     AllocationService::commit(&conn, state.clock.as_ref(), &task_ids)
+}
+
+/* ---- 进度汇报（工单 07）：薄代理，账本与派生在 domain::progress ---- */
+
+/// 小看板视图：当前任务 + 今日完成量 + 当日目标 + 更换候选。
+#[tauri::command]
+pub fn get_mini_board(state: State<'_, AppState>) -> Result<MiniBoardView, PlanError> {
+    let conn = state.db.lock().unwrap();
+    ProgressService::board(&conn, state.clock.as_ref())
+}
+
+/// 指定当前任务（须在今日推进列表内且可推进）。
+#[tauri::command]
+pub fn set_current_task(
+    state: State<'_, AppState>,
+    task_id: i64,
+) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    ProgressService::set_current_task(&conn, state.clock.as_ref(), task_id)
+}
+
+/// 按序完成一个子目标（乱序拒绝；到 100% 自动完成）。
+#[tauri::command]
+pub fn complete_subgoal(
+    state: State<'_, AppState>,
+    subgoal_id: i64,
+) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    ProgressService::complete_subgoal(&conn, state.clock.as_ref(), subgoal_id).map(|_| ())
+}
+
+/// 撤销最后一个已完成的子目标（补偿账，进度实时重算）。
+#[tauri::command]
+pub fn undo_subgoal(
+    state: State<'_, AppState>,
+    subgoal_id: i64,
+) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    ProgressService::undo_subgoal(&conn, state.clock.as_ref(), subgoal_id)
+}
+
+/// 无子目标任务增量汇报 +percent%（5–100 的 5 倍数，累计不超 100%）。
+#[tauri::command]
+pub fn report_percent(
+    state: State<'_, AppState>,
+    task_id: i64,
+    percent: u32,
+) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    ProgressService::report_percent(&conn, state.clock.as_ref(), task_id, percent).map(|_| ())
+}
+
+/// 修正总进度（直接设定当前值，差额以事件落账；仅无子目标任务）。
+#[tauri::command]
+pub fn correct_total_progress(
+    state: State<'_, AppState>,
+    task_id: i64,
+    percent: u32,
+) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    ProgressService::correct_total(&conn, state.clock.as_ref(), task_id, percent).map(|_| ())
 }

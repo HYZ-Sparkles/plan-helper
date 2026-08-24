@@ -128,12 +128,24 @@
               <span class="task-name">{{ t.name }}</span>
               <StatusBadge :status="t.status" />
               <span class="task-mark">
-                <!-- 有子目标：显示派生进度（ADR-0002）；无子目标：显示手填耗时 -->
+                <!-- 进度均为派生值（ADR-0002）：有子目标带图标；无子目标百分比来自汇报日志 -->
                 <template v-if="t.has_subgoals">
                   <PhListChecks :size="14" /> {{ taskProgressLabel(t) || "0%" }}
                 </template>
-                <template v-else-if="t.estimated_minutes != null">{{ hoursFromMinutes(t.estimated_minutes) }} h</template>
+                <template v-else-if="t.estimated_minutes != null">
+                  {{ taskProgressLabel(t) || "0%" }} · {{ hoursFromMinutes(t.estimated_minutes) }} h
+                </template>
               </span>
+              <!-- 修正总进度（无子目标任务专属改口通道；已完成锁定不显示） -->
+              <button
+                v-if="!t.has_subgoals && t.status !== 'Completed'"
+                type="button"
+                class="icon-btn"
+                title="修正总进度"
+                @click="openCorrection(t)"
+              >
+                <PhSlidersHorizontal :size="15" />
+              </button>
             </div>
             <!-- 子目标层级（CONTEXT PlanDetail：任务 → 子目标，按填写顺序；圆圈符号已承载行标识） -->
             <ul v-if="t.has_subgoals && t.subgoals.length > 0" class="subgoal-list">
@@ -195,6 +207,32 @@
     >
       <p>输入「再删」后，计划「{{ plan!.name }}」将进入「已放弃」终态。</p>
     </TypeConfirmDialog>
+
+    <!-- 修正总进度（spec 36：直接设定当前值、带确认、以事件落账；仅无子目标任务） -->
+    <ConfirmDialog
+      v-if="correcting"
+      title="修正总进度"
+      action-label="修正"
+      @confirm="applyCorrection"
+      @cancel="correcting = null"
+    >
+      <p>
+        任务「{{ correcting.name }}」当前 {{ Math.round(correcting.progress_percent) }}%，
+        直接设定为
+        <input
+          v-model="correctValue"
+          class="input correct-input"
+          type="number"
+          min="0"
+          max="100"
+          step="5"
+          @keyup.enter="applyCorrection"
+        />
+        %（0–100 的 5 倍数）
+      </p>
+      <p v-if="correctError" class="correct-error">{{ correctError }}</p>
+      <p class="hint">修正以事件落账，今日统计随之重算。</p>
+    </ConfirmDialog>
   </section>
 </template>
 
@@ -209,6 +247,7 @@ import {
   PhPause,
   PhPencilSimple,
   PhPlay,
+  PhSlidersHorizontal,
   PhXCircle,
 } from "@phosphor-icons/vue";
 import { useRoute, useRouter } from "vue-router";
@@ -221,6 +260,7 @@ import {
   abortPlan,
   completePlan,
   copyPlanAsNew,
+  correctTotalProgress,
   getPlan,
   pausePlan,
   resumePlan,
@@ -230,6 +270,7 @@ import {
 } from "../lib/api";
 import { hoursFromMinutes, pauseReasonLabel, planErrorMessage } from "../lib/labels";
 import { taskProgress, taskProgressLabel } from "../lib/progress";
+import { isValidPercentStep } from "../lib/validation";
 
 const route = useRoute();
 const router = useRouter();
@@ -244,6 +285,10 @@ const serverError = ref("");
 /** 完成计划确认弹窗；放弃两步弹窗当前所在阶段（null = 关闭） */
 const pendingComplete = ref(false);
 const abortStage = ref<"info" | "type" | null>(null);
+/** 修正总进度弹窗（正在修正的任务）；输入值与本地校验文案 */
+const correcting = ref<TaskView | null>(null);
+const correctValue = ref("0");
+const correctError = ref("");
 
 /** 所有任务已完成（≥1 个任务）——「完成计划」亮起条件（PlanCompletionConfirm） */
 const allTasksDone = computed(
@@ -332,6 +377,25 @@ async function runLifecycle(
 async function copyAsNew() {
   const newId = await copyPlanAsNew(plan.value!.id);
   await router.push(`/control-panel/plans/${newId}`);
+}
+
+/** 打开修正总进度弹窗：输入初值 = 当前进度（就近取 5 倍数） */
+function openCorrection(t: TaskView) {
+  correcting.value = t;
+  correctValue.value = String(Math.round(t.progress_percent / 5) * 5);
+  correctError.value = "";
+}
+
+/** 修正总进度：本地校验 0–100 的 5 倍数（与服务端同一颗粒度），服务层权威落账（差额以事件记账） */
+async function applyCorrection() {
+  const v = Number(correctValue.value);
+  if (!isValidPercentStep(v, 0)) {
+    correctError.value = "请填 0–100 内 5 的倍数";
+    return;
+  }
+  correctError.value = "";
+  await runLifecycle(() => correctTotalProgress(correcting.value!.id, v));
+  if (!serverError.value) correcting.value = null; // 失败保留弹窗，错误文案透出
 }
 
 onMounted(load);
@@ -535,5 +599,19 @@ watch(() => route.params.id, load);
   padding: 2px 0 2px 4px;
   font-size: 12px;
   color: var(--text-muted);
+}
+
+/* 修正总进度弹窗：行内数字输入 */
+.correct-input {
+  width: 72px;
+  padding: 5px 8px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.correct-error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: 13px;
 }
 </style>

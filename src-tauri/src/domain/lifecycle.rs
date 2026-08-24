@@ -70,7 +70,7 @@ impl LifecycleService {
     /// 自 ProgressLog 派生（07 接线前恒 0，不会被空数据误判完成）。
     pub fn sync_task_completion(conn: &Connection, task_id: i64) -> Result<TaskStatus, PlanError> {
         let progress = PlanService::task_progress(conn, task_id)?; // 不存在/已删归 NotFound
-        if progress.percent() < 100.0 {
+        if !progress.is_complete() {
             return conn
                 .query_row(
                     "SELECT status FROM tasks WHERE id = ?1 AND deleted_at IS NULL",

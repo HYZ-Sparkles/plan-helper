@@ -196,6 +196,20 @@ pub enum PlanError {
     TasksNotCompleted,
     /// 任务不可选入今日分配（前置未完成 / 计划不在进行中 / 已完成）
     TaskNotAllocatable { task_id: i64 },
+    /// 任务不在今日推进列表（指定当前任务的后端兜底，工单 07）
+    TaskNotInToday { task_id: i64 },
+    /// 子目标乱序：未完成前面的子目标就推进后面 / 撤销的不是最后一个已完成（前缀不变式）
+    SubGoalOutOfOrder,
+    /// 撤销目标尚未完成
+    SubGoalNotCompleted,
+    /// 已完成任务进度锁定：不可汇报 / 撤销 / 修正（CONTEXT TaskStatus）
+    ProgressLocked,
+    /// 百分比非法（汇报 5–100、修正 0–100，都必须是 5 的倍数）
+    PercentInvalid,
+    /// 累计汇报将超过 100%（ProgressGranularity 增量上限）
+    PercentOverflow,
+    /// 百分比汇报 / 修正只适用于无子目标任务（有子目标走按序勾选与撤销）
+    NotPercentTask,
     /// 已完成任务字段锁定，提交内容与库中不一致
     TaskLocked { index: usize },
     /// 提交任务集与库中现存任务不一致（缺失或未知 id）——删除必须显式走 delete_task
@@ -236,6 +250,9 @@ pub struct TaskView {
     pub subgoals: Vec<SubGoalView>,
     /// 前置任务 id（同计划内，DependencyEditor 所见即所存）
     pub prerequisite_ids: Vec<i64>,
+    /// 派生进度百分比（0–100，ADR-0002）：有子目标 = 已完成子目标耗时占比；
+    /// 无子目标 = ProgressLog 增量分钟占预计总耗时比（工单 07 接线）
+    pub progress_percent: f64,
 }
 
 /// 子目标视图（completed 由 completed_at 派生，按 position 排序 = 填写顺序）
@@ -248,22 +265,27 @@ pub struct SubGoalView {
     pub completed: bool,
 }
 
-/// 任务派生进度（ADR-0002 耗时完成度）：分子 = 已完成子目标耗时之和。
-/// 无子目标任务的分子自 ProgressLog 派生（工单 07 接线，当前恒 0）。
+/// 任务派生进度（ADR-0002 耗时完成度）：分子 = 已完成分钟。
+/// 有子目标 = 已完成子目标耗时之和；无子目标 = ProgressLog 增量之和（百分比 × 总耗时落账）。
 #[derive(Debug, PartialEq)]
 pub struct TaskProgress {
-    pub completed_minutes: u32,
+    pub completed_minutes: f64,
     pub total_minutes: u32,
 }
 
 impl TaskProgress {
-    /// 百分比（0–100）；总耗时为 0 视为 0（validate 已保证有子目标时 > 0，纯防御）
+    /// 百分比（0–100）；总耗时为 0 视为 0（validate 已保证 > 0，纯防御）
     pub fn percent(&self) -> f64 {
         if self.total_minutes == 0 {
             0.0
         } else {
-            self.completed_minutes as f64 * 100.0 / self.total_minutes as f64
+            self.completed_minutes * 100.0 / self.total_minutes as f64
         }
+    }
+
+    /// 是否到 100%（工单 07 自动完成判定）。浮点累计有舍入误差，用 epsilon 容差比较。
+    pub fn is_complete(&self) -> bool {
+        self.total_minutes > 0 && self.completed_minutes + 1e-6 >= self.total_minutes as f64
     }
 }
 
@@ -493,22 +515,33 @@ impl PlanService {
     }
 
     /// 任务派生进度（ADR-0002）：改耗时/增删未完成子目标后自动缩放——
-    /// 分子（已完成分钟）不变、分母（总量）随编辑变化。无子目标任务分子恒 0（07 接 ProgressLog）。
+    /// 分子（已完成分钟）不变、分母（总量）随编辑变化。
+    /// 有子目标 = 已完成子目标耗时之和；无子目标 = ProgressLog 增量之和（工单 07 接线）。
     pub fn task_progress(conn: &Connection, task_id: i64) -> Result<TaskProgress, PlanError> {
-        conn.query_row(
-            "SELECT estimated_minutes,
-                    (SELECT COALESCE(SUM(estimated_minutes), 0) FROM subgoals
-                     WHERE task_id = tasks.id AND completed_at IS NOT NULL)
-             FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
-            params![task_id],
-            |row| {
-                Ok(TaskProgress {
-                    completed_minutes: row.get(1)?,
-                    total_minutes: row.get::<_, Option<u32>>(0)?.unwrap_or(0),
-                })
-            },
-        )
-        .map_err(notfound_or_db)
+        let (has_subgoals, subgoal_done, log_sum, total): (bool, f64, f64, Option<u32>) = conn
+            .query_row(
+                "SELECT tasks.has_subgoals,
+                        (SELECT COALESCE(SUM(estimated_minutes), 0) FROM subgoals
+                         WHERE task_id = tasks.id AND completed_at IS NOT NULL),
+                        (SELECT COALESCE(SUM(delta_minutes), 0.0) FROM progress_log
+                         WHERE task_id = tasks.id),
+                        tasks.estimated_minutes
+                 FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+                params![task_id],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)? != 0,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                    ))
+                },
+            )
+            .map_err(notfound_or_db)?;
+        Ok(TaskProgress {
+            completed_minutes: if has_subgoals { subgoal_done } else { log_sum },
+            total_minutes: total.unwrap_or(0),
+        })
     }
 }
 
@@ -691,6 +724,7 @@ fn load_tasks(conn: &Connection, plan_filter: Option<i64>) -> Result<Vec<(i64, T
         .map_err(db_err)?;
     for (_, task) in tasks.iter_mut() {
         task.subgoals = load_subgoals(conn, task.id)?;
+        task.progress_percent = PlanService::task_progress(conn, task.id)?.percent();
         let mut stmt = conn
             .prepare("SELECT predecessor_id FROM task_dependencies WHERE successor_id = ?1")
             .map_err(db_err)?;
@@ -703,8 +737,8 @@ fn load_tasks(conn: &Connection, plan_filter: Option<i64>) -> Result<Vec<(i64, T
     Ok(tasks)
 }
 
-/// 加载任务的子目标（按 position 排序 = 填写顺序）。
-fn load_subgoals(conn: &Connection, task_id: i64) -> Result<Vec<SubGoalView>, PlanError> {
+/// 加载任务的子目标（按 position 排序 = 填写顺序）。progress 域装配小看板视图复用。
+pub(crate) fn load_subgoals(conn: &Connection, task_id: i64) -> Result<Vec<SubGoalView>, PlanError> {
     conn.prepare(
         "SELECT id, name, estimated_minutes, position, completed_at IS NOT NULL
          FROM subgoals WHERE task_id = ?1 ORDER BY position",
@@ -765,7 +799,7 @@ fn plan_row(row: &Row) -> rusqlite::Result<PlanView> {
     })
 }
 
-/// tasks 表行 → (所属 plan_id, TaskView)（subgoals/prerequisite_ids 由 load_tasks 装配）
+/// tasks 表行 → (所属 plan_id, TaskView)（subgoals/prerequisite_ids/progress_percent 由 load_tasks 装配）
 pub(crate) fn task_row(row: &Row) -> rusqlite::Result<(i64, TaskView)> {
     Ok((
         row.get(1)?,
@@ -780,6 +814,7 @@ pub(crate) fn task_row(row: &Row) -> rusqlite::Result<(i64, TaskView)> {
             status: TaskStatus::from_db(&row.get::<_, String>(8)?),
             subgoals: Vec::new(),
             prerequisite_ids: Vec::new(),
+            progress_percent: 0.0,
         },
     ))
 }
@@ -839,8 +874,9 @@ fn default_text<'a>(summary: &'a str, name: &'a str) -> &'a str {
     }
 }
 
-/// 单行查询无结果归 NotFound，其余 rusqlite 错误归存储兜底
-fn notfound_or_db(e: rusqlite::Error) -> PlanError {
+/// 单行查询无结果归 NotFound，其余 rusqlite 错误归存储兜底。
+/// pub(crate)：progress 等同 crate 领域模块复用同一兜底
+pub(crate) fn notfound_or_db(e: rusqlite::Error) -> PlanError {
     match e {
         rusqlite::Error::QueryReturnedNoRows => PlanError::NotFound,
         e => db_err(e),

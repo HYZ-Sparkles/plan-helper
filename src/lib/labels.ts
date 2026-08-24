@@ -73,6 +73,20 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
       return "目标计划或任务不存在";
     case "TaskNotAllocatable":
       return "选中集中有不可分配的任务（前置未完成、已完成或计划不在进行中）";
+    case "TaskNotInToday":
+      return "该任务不在今日推进列表里，请先在大面板选中它";
+    case "SubGoalOutOfOrder":
+      return "子目标需按顺序推进，撤销也只能从最后一个已完成项开始";
+    case "SubGoalNotCompleted":
+      return "该子目标还没有完成，无需撤销";
+    case "ProgressLocked":
+      return "任务已完成，进度锁定不可再变更";
+    case "PercentInvalid":
+      return "百分比必须是 5 的倍数（汇报 5–100，修正 0–100）";
+    case "PercentOverflow":
+      return "累计汇报会超过 100%，请调小本次增量";
+    case "NotPercentTask":
+      return "有子目标的任务按子目标推进与撤销，不走百分比";
     case "Storage":
       return `存储异常：${err.payload}`;
     default:

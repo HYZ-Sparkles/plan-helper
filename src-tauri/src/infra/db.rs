@@ -94,4 +94,17 @@ CREATE TABLE IF NOT EXISTS today_allocations (
     date     TEXT NOT NULL,                      -- 分配归属的工作日 YYYY-MM-DD（本地日期）
     task_ids TEXT NOT NULL                       -- JSON [taskId,...]（今日选中的任务集）
 );
+
+CREATE TABLE IF NOT EXISTS progress_log (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id       INTEGER NOT NULL REFERENCES tasks(id), -- 汇报所属任务
+    at            TEXT NOT NULL,                -- RFC3339 事件时刻
+    delta_minutes REAL NOT NULL,                -- 增量分钟（撤销 / 下调修正为负，追加式账本）
+    source        TEXT NOT NULL                 -- SubGoal | SubGoalUndo | Percent | Correction
+);
+
+CREATE TABLE IF NOT EXISTS current_task (
+    id      INTEGER PRIMARY KEY CHECK (id = 1), -- 单行：用户指定的「此刻正在做」（工单 07）
+    task_id INTEGER NOT NULL REFERENCES tasks(id)
+);
 ";

@@ -281,28 +281,28 @@ fn progress_scales_by_completed_minutes_across_edits() {
     force_subgoal_completed(&conn, view.tasks[0].subgoals[0].id);
 
     let pr = PlanService::task_progress(&conn, task_id).unwrap();
-    assert_eq!(pr, plan_helper_lib::domain::plans::TaskProgress { completed_minutes: 60, total_minutes: 100 });
+    assert_eq!(pr, plan_helper_lib::domain::plans::TaskProgress { completed_minutes: 60.0, total_minutes: 100 });
     assert_eq!(pr.percent(), 60.0);
 
     let mut d1 = draft_of(&PlanService::get(&conn, id).unwrap());
     d1.tasks[0].subgoals[1].estimated_minutes = 80; // 改未完成行耗时
     PlanService::update(&conn, &at(2026, 8, 25, 9, 0), id, &d1).unwrap();
     let pr = PlanService::task_progress(&conn, task_id).unwrap();
-    assert_eq!((pr.completed_minutes, pr.total_minutes), (60, 140));
+    assert_eq!((pr.completed_minutes, pr.total_minutes), (60.0, 140));
     assert!((pr.percent() - 42.857142857142854).abs() < 1e-9);
 
     let mut d2 = draft_of(&PlanService::get(&conn, id).unwrap());
     d2.tasks[0].subgoals.push(sub("C", 20)); // 增未完成行
     PlanService::update(&conn, &at(2026, 8, 25, 10, 0), id, &d2).unwrap();
     let pr = PlanService::task_progress(&conn, task_id).unwrap();
-    assert_eq!((pr.completed_minutes, pr.total_minutes), (60, 160));
+    assert_eq!((pr.completed_minutes, pr.total_minutes), (60.0, 160));
     assert_eq!(pr.percent(), 37.5);
 
     let mut d3 = draft_of(&PlanService::get(&conn, id).unwrap());
     d3.tasks[0].subgoals.remove(1); // 删未完成行 B
     PlanService::update(&conn, &at(2026, 8, 25, 11, 0), id, &d3).unwrap();
     let pr = PlanService::task_progress(&conn, task_id).unwrap();
-    assert_eq!((pr.completed_minutes, pr.total_minutes), (60, 80));
+    assert_eq!((pr.completed_minutes, pr.total_minutes), (60.0, 80));
     assert_eq!(pr.percent(), 75.0);
 }
 

@@ -18,3 +18,12 @@ export function normalizeDateString(s: string): string | null {
   }
   return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
+
+/**
+ * 百分比档位校验（CONTEXT ProgressGranularity）：整数且为 5 的倍数、落在 [min, 100]。
+ * 汇报档位 min = 5（小看板直填）、修正总进度 min = 0（详情页弹窗）；后端另有权威校验，
+ * 这里只做即时反馈。
+ */
+export function isValidPercentStep(v: number, min: 0 | 5): boolean {
+  return Number.isInteger(v) && v % 5 === 0 && v >= min && v <= 100;
+}

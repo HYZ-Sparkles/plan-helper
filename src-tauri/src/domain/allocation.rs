@@ -116,7 +116,8 @@ impl AllocationService {
     }
 
     /// 库中存储的选中集原样读出（无行或 JSON 损坏 → 空；调用方自行与候选求交）。
-    fn stored_selection(conn: &Connection, clock: &dyn Clock) -> Result<Vec<i64>, PlanError> {
+    /// progress 域（工单 07）复用：当前任务须落在今日推进列表内。
+    pub(crate) fn stored_selection(conn: &Connection, clock: &dyn Clock) -> Result<Vec<i64>, PlanError> {
         let raw: Option<String> = conn
             .query_row(
                 "SELECT task_ids FROM today_allocations WHERE id = 1 AND date = ?1",
@@ -174,6 +175,7 @@ fn selectable_of(groups: &[AllocationGroup]) -> Vec<i64> {
 }
 
 /// 注入时钟的本地日期（YYYY-MM-DD）。分配/判定的"今日"统一走这里，跨午夜安全由调用侧窗口语义保证。
-fn today_string(clock: &dyn Clock) -> String {
+/// progress 域（工单 07）的今日完成量口径复用。
+pub(crate) fn today_string(clock: &dyn Clock) -> String {
     clock.now().format("%Y-%m-%d").to_string()
 }
