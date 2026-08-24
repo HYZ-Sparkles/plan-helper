@@ -39,15 +39,14 @@ pub struct AllocationGroup {
     pub tasks: Vec<AllocationTask>,
 }
 
-/// 分组内一条候选任务。waiting_on 非空 = 前置未完成，置灰不可勾选（"等待：任务A"）。
+/// 分组内一条候选任务。被依赖阻塞的任务不进入大面板——只展示可选任务
+/// （2026-08-24 用户决策，原"置灰展示等待项"砍掉；阻塞与否仍实时派生）。
 #[derive(Debug, Serialize)]
 pub struct AllocationTask {
     pub id: i64,
     pub name: String,
     /// 预计耗时（分钟）：无子目标 = 手填值；有子目标 = 子目标求和（落库已归一到本列）
     pub estimated_minutes: u32,
-    /// 未完成前置任务名列表（空 = 依赖就绪可选）
-    pub waiting_on: Vec<String>,
 }
 
 /// 今日分配读写服务。
@@ -135,22 +134,21 @@ impl AllocationService {
             .unwrap_or_default())
     }
 
-    /// 候选分组：进行中计划（抢占未实现，天然同等级）→ 未完成任务 → 依赖等待名单。
-    /// 排序直接复用 PlanService::list 的 PlanOrdering；等待判定复用 DependencyService。
+    /// 候选分组：进行中计划（抢占未实现，天然同等级）→ 未完成任务 → 依赖就绪过滤
+    /// （被阻塞的不展示）。排序直接复用 PlanService::list 的 PlanOrdering；
+    /// 就绪判定复用 DependencyService（waiting_on 派生）。
     fn candidates(conn: &Connection) -> Result<Vec<AllocationGroup>, PlanError> {
         let mut groups = Vec::new();
         for plan in PlanService::list(conn)?.into_iter().filter(|p| p.status == PlanStatus::Active) {
             let mut tasks = Vec::new();
             for t in plan.tasks.iter().filter(|t| t.status != TaskStatus::Completed) {
-                let waiting_on = DependencyService::waiting_on(conn, t.id)?
-                    .into_iter()
-                    .map(|w| w.name)
-                    .collect();
+                if !DependencyService::is_unblocked(conn, t.id)? {
+                    continue; // 前置未完成：不进入大面板（解锁当日自然回到列表）
+                }
                 tasks.push(AllocationTask {
                     id: t.id,
                     name: t.name.clone(),
                     estimated_minutes: t.estimated_minutes.unwrap_or(0),
-                    waiting_on,
                 });
             }
             if !tasks.is_empty() {
@@ -166,12 +164,11 @@ impl AllocationService {
     }
 }
 
-/// 从候选分组摊平出可选任务 id 集（依赖就绪才可选）：board 回显求交与 commit 校验共用。
+/// 从候选分组摊平出可选任务 id 集（进入分组的任务全部可选）：board 回显求交与 commit 校验共用。
 fn selectable_of(groups: &[AllocationGroup]) -> Vec<i64> {
     groups
         .iter()
         .flat_map(|g| &g.tasks)
-        .filter(|t| t.waiting_on.is_empty())
         .map(|t| t.id)
         .collect()
 }

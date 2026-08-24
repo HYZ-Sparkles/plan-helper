@@ -2,7 +2,8 @@
   <!--
     大面板：今日任务分配（工单 06，术语 MainBoardTodayAllocation）。
     按计划分组展示所有进行中计划的可选任务；勾选实时累计对照当日目标（柔性边界，
-    不阻止提交）；前置未完成的任务置灰显示"等待：任务A"不可勾选。
+    不阻止提交）。被依赖阻塞的任务不展示——只展示可选任务（2026-08-24 用户决策，
+    原"置灰展示等待项"砍掉，解锁当日自然回到列表）。
     确认 = 持久化当日分配并隐藏窗口；重开（控制面板入口）回显旧选择可覆盖重选。
   -->
   <div class="board">
@@ -41,17 +42,9 @@
           </header>
           <ul class="task-card">
             <li v-for="t in g.tasks" :key="t.id">
-              <label class="task-row" :class="{ blocked: t.waiting_on.length > 0 }">
-                <input
-                  v-model="selected"
-                  type="checkbox"
-                  :value="t.id"
-                  :disabled="t.waiting_on.length > 0"
-                />
+              <label class="task-row">
+                <input v-model="selected" type="checkbox" :value="t.id" />
                 <span class="task-name">{{ t.name }}</span>
-                <span v-if="t.waiting_on.length > 0" class="waiting">
-                  <PhHourglass :size="13" /> 等待：{{ t.waiting_on.join("、") }}
-                </span>
                 <span class="task-time">{{ hoursFromMinutes(t.estimated_minutes) }} 小时</span>
               </label>
             </li>
@@ -98,7 +91,6 @@ import {
   PhCheck,
   PhCoffee,
   PhFlag,
-  PhHourglass,
   PhMoonStars,
 } from "@phosphor-icons/vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
@@ -121,7 +113,7 @@ const selected = ref<number[]>([]);
 /** 候选任务全集（分组摊平），累计与回显过滤共用 */
 const allTasks = computed(() => board.value?.groups.flatMap((g) => g.tasks) ?? []);
 
-/** 勾选实时累计：选中任务的预计耗时之和（前置阻塞项不可勾选，天然被排除） */
+/** 勾选实时累计：选中任务的预计耗时之和（被阻塞任务不在候选列表，天然不参与） */
 const accumulatedMinutes = computed(() =>
   allTasks.value
     .filter((t) => selected.value.includes(t.id))
@@ -304,7 +296,7 @@ onMounted(async () => {
   cursor: pointer;
 }
 
-.task-row:hover:not(.blocked) {
+.task-row:hover {
   background: var(--bg-group);
 }
 
@@ -319,20 +311,6 @@ onMounted(async () => {
 .task-name {
   flex: 1;
   min-width: 0;
-}
-
-/* 前置未完成：整行置灰不可选 */
-.task-row.blocked {
-  color: var(--text-muted);
-  cursor: not-allowed;
-}
-
-.waiting {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--text-muted);
-  font-size: 13px;
 }
 
 .task-time {

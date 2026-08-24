@@ -177,14 +177,13 @@ export function copyPlanAsNew(planId: number): Promise<number> {
 
 /* ---- 今日分配（工单 06）：装配与校验在 domain::allocation ---- */
 
-/** 分组内一条候选任务（对应 domain::allocation::AllocationTask） */
+/** 分组内一条候选任务（对应 domain::allocation::AllocationTask；
+ *  被依赖阻塞的任务不进列表——只展示可选任务） */
 export interface AllocationTask {
   id: number;
   name: string;
   /** 预计耗时（分钟）：无子目标 = 手填值；有子目标 = 子目标求和 */
   estimated_minutes: number;
-  /** 未完成前置任务名（非空 = 置灰不可勾选，显示"等待：任务A"） */
-  waiting_on: string[];
 }
 
 /** 一个进行中计划的分组（对应 domain::allocation::AllocationGroup） */

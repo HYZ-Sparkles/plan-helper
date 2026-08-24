@@ -123,8 +123,9 @@
           <p v-if="plan.tasks.length === 0" class="hint">
             计划暂无任务——点「编辑」追加（进行中的计划随时可以补任务）。
           </p>
-          <div v-for="t in plan.tasks" :key="t.id" class="task-card">
+          <div v-for="(t, ti) in plan.tasks" :key="t.id" class="task-card">
             <div class="task-line">
+              <span class="task-no">{{ ti + 1 }}.</span>
               <span class="task-name">{{ t.name }}</span>
               <StatusBadge :status="t.status" />
               <span class="task-mark">
@@ -137,7 +138,8 @@
             </div>
             <!-- 子目标层级（CONTEXT PlanDetail：任务 → 子目标，按填写顺序） -->
             <ul v-if="t.has_subgoals && t.subgoals.length > 0" class="subgoal-list">
-              <li v-for="s in t.subgoals" :key="s.id" :class="{ done: s.completed }">
+              <li v-for="(s, si) in t.subgoals" :key="s.id" :class="{ done: s.completed }">
+                <span class="sg-no">{{ si + 1 }}.</span>
                 <PhCheckCircle v-if="s.completed" :size="14" class="sg-state done" />
                 <PhCircle v-else :size="14" class="sg-state" />
                 <span class="sg-name">{{ s.name }}</span>
@@ -463,6 +465,17 @@ watch(() => route.params.id, load);
   align-items: center;
   gap: 10px;
   min-height: 38px;
+}
+
+/* 序号（创建顺序，只读标识；与 CreationForm 摘要行同款形态） */
+.task-no,
+.sg-no {
+  flex: none;
+  min-width: 20px;
+  text-align: right;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .task-name {
