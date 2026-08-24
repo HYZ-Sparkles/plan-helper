@@ -123,9 +123,8 @@
           <p v-if="plan.tasks.length === 0" class="hint">
             计划暂无任务——点「编辑」追加（进行中的计划随时可以补任务）。
           </p>
-          <div v-for="(t, ti) in plan.tasks" :key="t.id" class="task-card">
+          <div v-for="t in plan.tasks" :key="t.id" class="task-card">
             <div class="task-line">
-              <span class="task-no">{{ ti + 1 }}.</span>
               <span class="task-name">{{ t.name }}</span>
               <StatusBadge :status="t.status" />
               <span class="task-mark">
@@ -136,20 +135,18 @@
                 <template v-else-if="t.estimated_minutes != null">{{ hoursFromMinutes(t.estimated_minutes) }} h</template>
               </span>
             </div>
-            <!-- 子目标层级（CONTEXT PlanDetail：任务 → 子目标，按填写顺序） -->
+            <!-- 子目标层级（CONTEXT PlanDetail：任务 → 子目标，按填写顺序；圆圈符号已承载行标识） -->
             <ul v-if="t.has_subgoals && t.subgoals.length > 0" class="subgoal-list">
-              <li v-for="(s, si) in t.subgoals" :key="s.id" :class="{ done: s.completed }">
-                <span class="sg-no">{{ si + 1 }}.</span>
+              <li v-for="s in t.subgoals" :key="s.id" :class="{ done: s.completed }">
                 <PhCheckCircle v-if="s.completed" :size="14" class="sg-state done" />
                 <PhCircle v-else :size="14" class="sg-state" />
                 <span class="sg-name">{{ s.name }}</span>
                 <span class="sg-hours">{{ hoursFromMinutes(s.estimated_minutes) }} h</span>
               </li>
             </ul>
-            <!-- 前置依赖（同计划内）：查看态只读提示等待谁 -->
-            <p v-if="depNames(t).length > 0" class="dep-line">
-              前置：{{ depNames(t).join("、") }}
-            </p>
+            <!-- 依赖双向可见（顺序关系的诚实载体是边不是序号）：入边"谁挡我" + 出边"我挡谁" -->
+            <p v-if="depNames(t).length > 0" class="dep-line">前置：{{ depNames(t).join("、") }}</p>
+            <p v-if="waitingFor(t).length > 0" class="dep-line">被等待：{{ waitingFor(t).join("、") }}</p>
           </div>
         </div>
       </div>
@@ -279,6 +276,15 @@ function depNames(t: TaskView): string[] {
     const pred = plan.value!.tasks.find((p) => p.id === id);
     return pred ? [pred.name] : [];
   });
+}
+
+/** 任务的后续任务名列表（prerequisite_ids 指向本任务的任务）——"我挡谁"，
+ *  与 depNames（"谁挡我"）对偶，依赖链在详情页双向可读 */
+function waitingFor(t: TaskView): string[] {
+  if (!plan.value) return [];
+  return plan.value.tasks
+    .filter((p) => p.id !== t.id && p.prerequisite_ids.includes(t.id))
+    .map((p) => p.name);
 }
 
 async function load() {
@@ -465,17 +471,6 @@ watch(() => route.params.id, load);
   align-items: center;
   gap: 10px;
   min-height: 38px;
-}
-
-/* 序号（创建顺序，只读标识；与 CreationForm 摘要行同款形态） */
-.task-no,
-.sg-no {
-  flex: none;
-  min-width: 20px;
-  text-align: right;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .task-name {

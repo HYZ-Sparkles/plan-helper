@@ -3,8 +3,9 @@
     CreationUI：创建/编辑双模式共用的单页可折叠表单（CONTEXT「创建流程的 UI 模式」）。
     Plan 段默认展开；任务卡默认收起为一行摘要（序号 + 名称 + 耗时/子目标标记），
     点行展开完整字段——长字段只在展开态出现（2026-08-23 grill 决策）。
-    任务顺序 = 创建顺序，不可拖拽（2026-08-24 用户决策砍掉拖拽——先后语义唯一归依赖边，
-    同子目标"顺序 = 填写顺序"规则；已完成自动沉底、追加落在未完成之后仍由服务层归一化）。
+    任务顺序 = 创建顺序，不可拖拽、不加序号（2026-08-24 用户决策砍掉拖拽与序号——先后语义
+    唯一归依赖边，偏序任务贴全序编号必然误导；顺序关系由依赖边展示承载：详情页"前置/被等待"
+    行、本表单 DependencyEditor）。已完成自动沉底、追加落在未完成之后仍由服务层归一化。
     编辑态额外规则：已完成任务锁定（字段禁用），计划开始后优先级锁定。
   -->
   <div class="creation-form">
@@ -52,9 +53,8 @@
           class="task-card"
           :class="{ expanded: !task.collapsed, locked: isLocked(task) }"
         >
-          <!-- 常驻摘要行：序号 + 名称 + 耗时/子目标标记 + 删除；点行展开 -->
+          <!-- 常驻摘要行：名称 + 耗时/子目标标记 + 删除；点行展开 -->
           <header class="task-line" @click="task.collapsed = !task.collapsed">
-            <span class="task-no">{{ i + 1 }}.</span>
             <span class="task-name" :class="{ unnamed: !task.name.trim() }">
               {{ task.name.trim() || `任务 ${i + 1}` }}
             </span>
@@ -122,7 +122,7 @@
               </FormField>
             </div>
 
-            <!-- 精简输入行（CONTEXT「子目标填写表单」）：序号 + 内容 + 耗时，行末 + 与回车都加行聚焦内容框 -->
+            <!-- 精简输入行（CONTEXT「子目标填写表单」）：内容 + 耗时，行末 + 与回车都加行聚焦内容框 -->
             <div v-if="task.hasSubgoals" class="subgoal-rows">
               <div
                 v-for="(s, j) in task.subgoals"
@@ -130,7 +130,6 @@
                 class="subgoal-row"
                 :class="{ done: s.completed }"
               >
-                <span class="sg-no">{{ j + 1 }}.</span>
                 <PhCheckCircle v-if="s.completed" class="sg-done" :size="16" />
                 <input
                   v-model="s.name"
@@ -692,7 +691,7 @@ async function save() {
   overflow: hidden;
 }
 
-/* 紧凑摘要行（常驻，矮行）：一行放下序号/名称/标记/操作 */
+/* 紧凑摘要行（常驻，矮行）：一行放下名称/标记/操作 */
 .task-line {
   display: flex;
   align-items: center;
@@ -701,16 +700,6 @@ async function save() {
   padding: 6px 10px;
   cursor: pointer;
   user-select: none;
-}
-
-/* 序号（创建顺序，只读标识）：muted 等宽右对齐，个位数与两位数名字起点对齐 */
-.task-no {
-  flex: none;
-  min-width: 20px;
-  text-align: right;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .task-name {
@@ -784,16 +773,6 @@ async function save() {
 
 .subgoal-row.done .sg-name {
   color: var(--text-muted);
-}
-
-/* 子目标行序号（填写顺序）：与任务序号同款形态 */
-.sg-no {
-  flex: none;
-  min-width: 20px;
-  text-align: right;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 .sg-done {
