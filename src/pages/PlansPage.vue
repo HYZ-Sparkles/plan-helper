@@ -6,7 +6,13 @@
     2026-08-24 决策砍掉手动拖拽排序——实施顺序在大面板自主选择，列表手动序无意义）。
   -->
   <section class="plans-col">
-    <h2 class="page-title">计划管理</h2>
+    <div class="title-row">
+      <h2 class="page-title">计划管理</h2>
+      <!-- 打开大面板：重开今日分配（覆盖重选；已推进的进度从日志来不受影响） -->
+      <button type="button" class="ghost-btn" @click="openMainBoard">
+        <PhCalendarCheck :size="16" /> 打开大面板
+      </button>
+    </div>
 
     <div class="filter-bar">
       <button
@@ -58,6 +64,9 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import { emitTo } from "@tauri-apps/api/event";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { PhCalendarCheck } from "@phosphor-icons/vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { listPlans, type PlanStatus, type PlanView } from "../lib/api";
@@ -102,6 +111,15 @@ function countOf(f: (typeof filters)[number]) {
 function totalHours(p: PlanView) {
   return hoursFromMinutes(p.tasks.reduce((sum, t) => sum + (t.estimated_minutes ?? 0), 0));
 }
+
+/** 打开大面板：先发重开事件让面板刷新到最新数据，再显示并聚焦 */
+async function openMainBoard() {
+  const board = await WebviewWindow.getByLabel("main-board");
+  if (!board) return; // 面板随应用启动创建（隐藏态），正常路径恒存在
+  await emitTo("main-board", "main-board:reopen");
+  await board.show();
+  await board.setFocus();
+}
 </script>
 
 <style scoped>
@@ -110,6 +128,14 @@ function totalHours(p: PlanView) {
   max-width: 840px;
   width: 100%;
   margin: 0 auto;
+}
+
+/* 标题行：标题在左，「打开大面板」贴右 */
+.title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .filter-bar {

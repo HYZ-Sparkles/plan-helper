@@ -4,6 +4,7 @@
 use tauri::State;
 
 use crate::app_state::AppState;
+use crate::domain::allocation::{AllocationBoardView, AllocationService};
 use crate::domain::app_state::{app_state_view, AppStateView};
 use crate::domain::lifecycle::LifecycleService;
 use crate::domain::plans::{PlanDraft, PlanError, PlanService, PlanView};
@@ -99,4 +100,23 @@ pub fn abort_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanEr
 pub fn copy_plan_as_new(state: State<'_, AppState>, plan_id: i64) -> Result<i64, PlanError> {
     let conn = state.db.lock().unwrap();
     LifecycleService::copy_as_new(&conn, state.clock.as_ref(), plan_id)
+}
+
+/* ---- 今日分配（工单 06）：薄代理，装配与校验在 domain::allocation ---- */
+
+/// 大面板视图：候选分组（依赖过滤）+ 今日回显 + 当日目标。
+#[tauri::command]
+pub fn get_allocation_board(state: State<'_, AppState>) -> Result<AllocationBoardView, PlanError> {
+    let conn = state.db.lock().unwrap();
+    AllocationService::board(&conn, state.clock.as_ref())
+}
+
+/// 提交当日分配（覆盖重选）；选中集必须全部当前可选，服务层兜底校验。
+#[tauri::command]
+pub fn commit_today_allocation(
+    state: State<'_, AppState>,
+    task_ids: Vec<i64>,
+) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    AllocationService::commit(&conn, state.clock.as_ref(), &task_ids)
 }

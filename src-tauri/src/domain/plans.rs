@@ -194,6 +194,8 @@ pub enum PlanError {
     PlanNotTerminal { from: PlanStatus },
     /// 完成计划要求所有任务已完成（PlanCompletionConfirm：任务自动、计划手动）
     TasksNotCompleted,
+    /// 任务不可选入今日分配（前置未完成 / 计划不在进行中 / 已完成）
+    TaskNotAllocatable { task_id: i64 },
     /// 已完成任务字段锁定，提交内容与库中不一致
     TaskLocked { index: usize },
     /// 提交任务集与库中现存任务不一致（缺失或未知 id）——删除必须显式走 delete_task

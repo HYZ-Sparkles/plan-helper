@@ -71,6 +71,8 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
       return "任务集与库中不一致——删除任务请用任务卡上的删除按钮";
     case "NotFound":
       return "目标计划或任务不存在";
+    case "TaskNotAllocatable":
+      return "选中集中有不可分配的任务（前置未完成、已完成或计划不在进行中）";
     case "Storage":
       return `存储异常：${err.payload}`;
     default:
@@ -81,4 +83,10 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
 /** 分钟 → 展示小时（如 90 → "1.5"）；供预计耗时展示复用 */
 export function hoursFromMinutes(minutes: number): string {
   return (minutes / 60).toString();
+}
+
+/** 分钟 → 固定一位小数的小时文案（X.X 口径，如 90 → "1.5"、180 → "3.0"）；
+ *  大面板状态条累计/差额与工单 10 的结转标注（"基准 5.0h"）复用 */
+export function hoursLabel(minutes: number): string {
+  return (minutes / 60).toFixed(1);
 }

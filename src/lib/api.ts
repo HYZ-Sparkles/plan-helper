@@ -174,3 +174,47 @@ export function abortPlan(planId: number): Promise<void> {
 export function copyPlanAsNew(planId: number): Promise<number> {
   return invoke<number>("copy_plan_as_new", { planId });
 }
+
+/* ---- 今日分配（工单 06）：装配与校验在 domain::allocation ---- */
+
+/** 分组内一条候选任务（对应 domain::allocation::AllocationTask） */
+export interface AllocationTask {
+  id: number;
+  name: string;
+  /** 预计耗时（分钟）：无子目标 = 手填值；有子目标 = 子目标求和 */
+  estimated_minutes: number;
+  /** 未完成前置任务名（非空 = 置灰不可勾选，显示"等待：任务A"） */
+  waiting_on: string[];
+}
+
+/** 一个进行中计划的分组（对应 domain::allocation::AllocationGroup） */
+export interface AllocationGroup {
+  plan_id: number;
+  plan_name: string;
+  priority: Priority;
+  tasks: AllocationTask[];
+}
+
+/** 大面板一次装配的完整视图（对应 domain::allocation::AllocationBoardView） */
+export interface AllocationBoardView {
+  /** 分配归属的工作日（YYYY-MM-DD） */
+  date: string;
+  /** 今日是否在设置的每周工作日里（false = 休息日态，分配不加载） */
+  workday: boolean;
+  /** 当日实际目标（分钟）。工单 06 = 基准工作时间；工单 10 升级为含结转 */
+  target_minutes: number;
+  /** 今日已分配的选中集（重开重选回显，已与当前可选集求交） */
+  selected_task_ids: number[];
+  /** 候选分组：所有进行中计划（PlanOrdering 排序） */
+  groups: AllocationGroup[];
+}
+
+/** 大面板视图：候选分组（依赖过滤）+ 今日回显 + 当日目标 */
+export function getAllocationBoard(): Promise<AllocationBoardView> {
+  return invoke<AllocationBoardView>("get_allocation_board");
+}
+
+/** 提交当日分配（覆盖重选）；不可选任务由服务层兜底拒绝 */
+export function commitTodayAllocation(taskIds: number[]): Promise<void> {
+  return invoke<void>("commit_today_allocation", { taskIds });
+}

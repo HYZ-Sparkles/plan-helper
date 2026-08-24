@@ -88,4 +88,10 @@ CREATE TABLE IF NOT EXISTS task_dependencies (
     successor_id   INTEGER NOT NULL REFERENCES tasks(id), -- 后继任务（B，依赖 A）
     PRIMARY KEY (predecessor_id, successor_id)
 );
+
+CREATE TABLE IF NOT EXISTS today_allocations (
+    id       INTEGER PRIMARY KEY CHECK (id = 1), -- 单行：最近一次提交的分配（覆盖重选即整行替换）
+    date     TEXT NOT NULL,                      -- 分配归属的工作日 YYYY-MM-DD（本地日期）
+    task_ids TEXT NOT NULL                       -- JSON [taskId,...]（今日选中的任务集）
+);
 ";

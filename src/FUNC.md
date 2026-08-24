@@ -14,6 +14,7 @@
   - `updatePlan(planId, draft): Promise<void>` — 整计划编辑保存（编辑态）
   - `deleteTask(taskId): Promise<void>` — 软删除任务进归档（服务端连带解除依赖边；确认弹窗在 UI）
   - 生命周期（工单 05，状态机在服务层、UI 只按状态展示可得操作）：`startPlan` / `pausePlan` / `resumePlan` / `completePlan` / `abortPlan`（二级确认在 UI）、`copyPlanAsNew(planId): Promise<number>`（返回新计划 id）
+  - 今日分配（工单 06）：`AllocationTask` / `AllocationGroup` / `AllocationBoardView` 类型、`getAllocationBoard(): Promise<AllocationBoardView>`（候选分组 + 今日回显 + 当日目标）、`commitTodayAllocation(taskIds): Promise<void>`（覆盖重选）
 - `src/lib/labels.ts` — 领域枚举的中文文案集中地：
   - `priorityLabel` / `statusLabel`（计划与任务状态合一张表，共有值标签一致）/ `pauseReasonLabel`（用户主动 / 自动抢占）映射表
   - `planErrorMessage(err)` — 后端 PlanError（{kind,payload}）→ 用户可读文案
@@ -23,6 +24,7 @@
   - `taskProgressLabel(task)` — "60%" 百分比文案；无子目标/零总量返回空串。详情页对勾了子目标但总量为 0 的任务以 `|| "0%"` 兜底展示
 - `src/lib/validation.ts` — 表单输入校验/归一工具：
   - `normalizeDateString(s)` — 常见日期写法（2026-12-20 / 2026/12/20 / 20261220）归一为 YYYY-MM-DD；非真实日历日期（含 2026-02-30）返回 null。DatePicker 失焦归一用，值要么合法要么回退，调用方免校验。
+- `src/lib/labels.ts#hoursLabel(minutes)` — 分钟 → **固定一位小数**的小时文案（X.X 口径，180 → "3.0"）；大面板状态条累计/差额与工单 10 结转标注（"基准 5.0h"）复用。行内任务耗时展示仍走 `hoursFromMinutes`（自然位数）。
 
 ## 复用组件（src/components/）
 
@@ -47,7 +49,8 @@
 ## 页面级实现要点（不易从文件名看出）
 
 - `PlanDetailPage.vue` — 生命周期按钮矩阵（未开始→开始；进行中→完成计划〔任务全完成后亮起〕/暂停/放弃；已暂停→继续/放弃；终态→复制并新建）；放弃走一级确认（保留多少历史）+ 二级打字「再删」；`runLifecycle` 统一 busy 互斥与错误文案。
-- `PlansPage.vue` — 纯展示列表（无拖拽；2026-08-24 决策砍掉计划手动排序，排序全在服务端默认规则）。
+- `PlansPage.vue` — 纯展示列表（无拖拽；2026-08-24 决策砍掉计划手动排序，排序全在服务端默认规则）；标题行右侧「打开大面板」按钮（`openMainBoard`：先 `emitTo("main-board", "main-board:reopen")` 再 show + setFocus——重开必须带回最新数据）。
+- `MainBoardWindow.vue` — 大面板今日分配（工单 06）：分组候选列表（checkbox 数组绑定 `selected`，置灰行 disabled）、底部状态条三区布局（左累计+微型进度条 / 中确认 / 右黄色差额软提示）、确认后 `win.hide()`；休息日态（`workday=false` 显示"今日不在工作日"、隐藏列表与状态条）；**关闭请求拦截为隐藏**（`onCloseRequested` preventDefault + hide，完整关闭语义归工单 14）；监听 `main-board:reopen` 事件重新 load（回显服务端选中集，本地未提交勾选被重置——仅重开瞬间发生）。
 - `CreationForm.vue` — 任务卡**指针连续流动拖拽**（2026-08-24 共识）：摘要行整行可拖（手柄仅视觉提示）、点击/拖拽按 4px 位移阈值区分（`onLineClick` 吞掉拖拽后的那次 click）、他卡以 transform 过渡连续让位/合拢、松手 `settling` 滑入槽位后 `commitDrop` 落数组；已完成任务锁定不拖不让位（未完成任务恒为前缀），追加任务插在未完成之后/已完成之前。
 
 ## 路由与多窗口
