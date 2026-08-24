@@ -40,6 +40,13 @@ export type PlanStatus = "NotStarted" | "Active" | "Paused" | "Completed" | "Aba
 /** 任务状态 */
 export type TaskStatus = "NotStarted" | "Active" | "Completed";
 
+/** 子目标草稿（对应 domain::plans::SubGoalDraft；id 缺省 = 新子目标） */
+export interface SubGoalDraft {
+  id?: number;
+  name: string;
+  estimated_minutes: number;
+}
+
 /** 任务草稿（对应 domain::plans::TaskDraft；id 缺省 = 新任务） */
 export interface TaskDraft {
   id?: number;
@@ -48,6 +55,10 @@ export interface TaskDraft {
   detail?: string;
   has_subgoals?: boolean;
   estimated_minutes?: number;
+  /** 子目标行（has_subgoals=false 时被服务层忽略） */
+  subgoals?: SubGoalDraft[];
+  /** 前置任务在 tasks 数组中的下标（草稿内相对引用，创建/编辑同一语义） */
+  depends_on?: number[];
 }
 
 /** 计划草稿（对应 domain::plans::PlanDraft）——创建与编辑共用（CreationUI 双模式） */
@@ -60,6 +71,15 @@ export interface PlanDraft {
   tasks: TaskDraft[];
 }
 
+/** 子目标视图（对应 domain::plans::SubGoalView） */
+export interface SubGoalView {
+  id: number;
+  name: string;
+  estimated_minutes: number;
+  position: number;
+  completed: boolean;
+}
+
 /** 任务视图（对应 domain::plans::TaskView） */
 export interface TaskView {
   id: number;
@@ -70,6 +90,9 @@ export interface TaskView {
   estimated_minutes: number | null;
   position: number;
   status: TaskStatus;
+  subgoals: SubGoalView[];
+  /** 前置任务 id（同计划内） */
+  prerequisite_ids: number[];
 }
 
 /** 计划视图（对应 domain::plans::PlanView，含嵌套任务） */

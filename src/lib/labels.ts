@@ -24,7 +24,11 @@ export const statusLabel: Record<PlanStatus | TaskStatus, string> = {
  * payload.index / payload.task_index 为任务序号（从 0 起），展示为第几个任务。
  */
 export function planErrorMessage(err: { kind?: string; payload?: unknown }): string {
-  const payload = (err.payload ?? {}) as { index?: number; task_index?: number | null };
+  const payload = (err.payload ?? {}) as {
+    index?: number;
+    task_index?: number | null;
+    subgoal_index?: number;
+  };
   const taskNo = (i: number) => `第 ${i + 1} 个任务`;
   switch (err.kind) {
     case "EmptyName":
@@ -35,6 +39,18 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
       return `${taskNo(payload.index ?? 0)}缺少预计耗时（无子目标任务必填）`;
     case "SubGoalsRequired":
       return `${taskNo(payload.index ?? 0)}勾选了子目标，但还没有录入子目标`;
+    case "SubGoalInvalid":
+      return `${taskNo(payload.task_index ?? 0)}的第 ${(payload.subgoal_index ?? 0) + 1} 行子目标缺少内容或预计耗时`;
+    case "SubGoalLocked":
+      return `${taskNo(payload.task_index ?? 0)}的已完成子目标锁定，不可修改或删除`;
+    case "DependencyInvalid":
+      return `${taskNo(payload.task_index ?? 0)}的前置任务引用无效`;
+    case "DependencyCrossPlan":
+      return "前置任务只能选择同一计划内的任务";
+    case "DependencyCycle":
+      return payload.task_index == null
+        ? "前置任务形成循环依赖"
+        : `${taskNo(payload.task_index)}的前置任务形成循环依赖`;
     case "PriorityLocked":
       return "计划开始后优先级不可调整";
     case "TaskLocked":

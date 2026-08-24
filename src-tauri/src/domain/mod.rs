@@ -2,5 +2,6 @@
 //! 全部自动化测试打在这一层（spec 接缝决策）。
 
 pub mod app_state;
+pub mod deps;
 pub mod plans;
 pub mod settings;

@@ -53,13 +53,31 @@
           <p v-if="plan.tasks.length === 0" class="hint">
             计划暂无任务——点「编辑」追加（进行中的计划随时可以补任务）。
           </p>
-          <div v-for="t in plan.tasks" :key="t.id" class="task-row">
-            <span class="task-name">{{ t.name }}</span>
-            <StatusBadge :status="t.status" />
-            <span class="task-mark">
-              <PhListChecks v-if="t.has_subgoals" :size="14" title="按子目标推进" />
-              <template v-else-if="t.estimated_minutes != null">{{ hoursFromMinutes(t.estimated_minutes) }} h</template>
-            </span>
+          <div v-for="t in plan.tasks" :key="t.id" class="task-card">
+            <div class="task-line">
+              <span class="task-name">{{ t.name }}</span>
+              <StatusBadge :status="t.status" />
+              <span class="task-mark">
+                <!-- 有子目标：显示派生进度（ADR-0002）；无子目标：显示手填耗时 -->
+                <template v-if="t.has_subgoals">
+                  <PhListChecks :size="14" /> {{ taskProgressLabel(t) || "0%" }}
+                </template>
+                <template v-else-if="t.estimated_minutes != null">{{ hoursFromMinutes(t.estimated_minutes) }} h</template>
+              </span>
+            </div>
+            <!-- 子目标层级（CONTEXT PlanDetail：任务 → 子目标，按填写顺序） -->
+            <ul v-if="t.has_subgoals && t.subgoals.length > 0" class="subgoal-list">
+              <li v-for="s in t.subgoals" :key="s.id" :class="{ done: s.completed }">
+                <PhCheckCircle v-if="s.completed" :size="14" class="sg-state done" />
+                <PhCircle v-else :size="14" class="sg-state" />
+                <span class="sg-name">{{ s.name }}</span>
+                <span class="sg-hours">{{ hoursFromMinutes(s.estimated_minutes) }} h</span>
+              </li>
+            </ul>
+            <!-- 前置依赖（同计划内）：查看态只读提示等待谁 -->
+            <p v-if="depNames(t).length > 0" class="dep-line">
+              前置：{{ depNames(t).join("、") }}
+            </p>
           </div>
         </div>
       </div>
@@ -78,13 +96,20 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { PhArrowLeft, PhListChecks, PhPencilSimple } from "@phosphor-icons/vue";
+import {
+  PhArrowLeft,
+  PhCheckCircle,
+  PhCircle,
+  PhListChecks,
+  PhPencilSimple,
+} from "@phosphor-icons/vue";
 import { useRoute } from "vue-router";
 import CreationForm from "../components/CreationForm.vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
-import { getPlan, type PlanView } from "../lib/api";
+import { getPlan, type PlanView, type TaskView } from "../lib/api";
 import { hoursFromMinutes, planErrorMessage } from "../lib/labels";
+import { taskProgressLabel } from "../lib/progress";
 
 const route = useRoute();
 const plan = ref<PlanView | null>(null);
@@ -99,6 +124,15 @@ const showSummary = computed(
 const hasFields = computed(
   () => showSummary.value || !!plan.value?.detail || !!plan.value?.due_date,
 );
+
+/** 任务的前置任务名列表（同计划内 id → 名称；悬空 id 服务层已随删除解除，这里自然为空） */
+function depNames(t: TaskView): string[] {
+  if (!plan.value) return [];
+  return t.prerequisite_ids.flatMap((id) => {
+    const pred = plan.value!.tasks.find((p) => p.id === id);
+    return pred ? [pred.name] : [];
+  });
+}
 
 async function load() {
   loadError.value = "";
@@ -225,15 +259,21 @@ watch(() => route.params.id, load);
   gap: 8px;
 }
 
-.task-row {
+/* 任务卡：摘要行 + 子目标层级 + 前置提示，纵向叠放 */
+.task-card {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 38px;
+  flex-direction: column;
   padding: 6px 12px;
   border: var(--border-default);
   border-radius: var(--radius-md);
   background: var(--surface);
+}
+
+.task-line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
 }
 
 .task-name {
@@ -248,5 +288,55 @@ watch(() => route.params.id, load);
   gap: 4px;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.subgoal-list {
+  margin: 2px 0 6px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subgoal-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0 2px 4px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.subgoal-list li .sg-state {
+  color: var(--text-muted);
+  flex: none;
+}
+
+.subgoal-list li .sg-state.done {
+  color: var(--color-done);
+}
+
+.subgoal-list li.done .sg-name {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+
+.subgoal-list .sg-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.subgoal-list .sg-hours {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.dep-line {
+  margin: 0 0 4px;
+  padding: 2px 0 2px 4px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 </style>

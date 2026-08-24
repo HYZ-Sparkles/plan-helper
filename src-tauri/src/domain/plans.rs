@@ -6,6 +6,7 @@ use rusqlite::{params, Connection, Row};
 use serde::{Deserialize, Serialize};
 
 use crate::clock::Clock;
+use crate::domain::deps::DependencyService;
 
 /// 优先级枚举（CONTEXT「优先级」）。派生 Ord 后 Low < Medium < High，排序即声明序。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -107,7 +108,7 @@ pub struct PlanDraft {
     pub tasks: Vec<TaskDraft>,
 }
 
-/// 任务草稿。无子目标任务必填预计耗时；有子目标时预计总耗时由子目标求和（工单 04）。
+/// 任务草稿。无子目标任务必填预计耗时；有子目标时预计总耗时 = 子目标求和（effective_minutes）。
 #[derive(Debug, Clone, Deserialize)]
 pub struct TaskDraft {
     #[serde(default)]
@@ -121,6 +122,22 @@ pub struct TaskDraft {
     pub has_subgoals: bool,
     #[serde(default)]
     pub estimated_minutes: Option<u32>,
+    /// 子目标草稿（精简输入行）。has_subgoals = false 时被忽略（UI 取消勾选确认后清空）
+    #[serde(default)]
+    pub subgoals: Vec<SubGoalDraft>,
+    /// 前置任务在草稿 tasks 数组中的下标（同一草稿内相对引用，创建/编辑同一语义；
+    /// 服务层解析为真实 id 建边——创建表单新任务无 id，用下标才能表达依赖）
+    #[serde(default)]
+    pub depends_on: Vec<usize>,
+}
+
+/// 子目标草稿：内容 + 预计耗时（CONTEXT「精简输入行」两项皆必填）。id 为 None = 新子目标。
+#[derive(Debug, Clone, Deserialize)]
+pub struct SubGoalDraft {
+    #[serde(default)]
+    pub id: Option<i64>,
+    pub name: String,
+    pub estimated_minutes: u32,
 }
 
 /// 计划领域的错误（command 边界序列化给前端展示）。
@@ -136,6 +153,16 @@ pub enum PlanError {
     TaskNeedsDuration { index: usize },
     /// 勾了子目标的任务至少 1 个子目标（工单 04 提供录入前必然拒绝）
     SubGoalsRequired { index: usize },
+    /// 子目标行内容或预计耗时缺失/非法（两项皆必填）
+    SubGoalInvalid { task_index: usize, subgoal_index: usize },
+    /// 已完成子目标锁定：被修改、或从提交集中消失（含取消勾选时的整体清空）
+    SubGoalLocked { task_index: usize },
+    /// 前置引用下标越界（自指由环检测拒绝）
+    DependencyInvalid { task_index: usize },
+    /// 依赖边跨计划（仅同计划内允许）
+    DependencyCrossPlan,
+    /// 依赖成环（task_index = 完成环的那条边所属草稿任务下标；link 直连时为 None）
+    DependencyCycle { task_index: Option<usize> },
     /// 计划开始后优先级不可调整（spec 用户故事 12）
     PriorityLocked,
     /// 已完成任务字段锁定，提交内容与库中不一致
@@ -173,6 +200,38 @@ pub struct TaskView {
     pub estimated_minutes: Option<u32>,
     pub position: i32,
     pub status: TaskStatus,
+    pub subgoals: Vec<SubGoalView>,
+    /// 前置任务 id（同计划内，DependencyEditor 所见即所存）
+    pub prerequisite_ids: Vec<i64>,
+}
+
+/// 子目标视图（completed 由 completed_at 派生，按 position 排序 = 填写顺序）
+#[derive(Debug, Clone, Serialize)]
+pub struct SubGoalView {
+    pub id: i64,
+    pub name: String,
+    pub estimated_minutes: u32,
+    pub position: i32,
+    pub completed: bool,
+}
+
+/// 任务派生进度（ADR-0002 耗时完成度）：分子 = 已完成子目标耗时之和。
+/// 无子目标任务的分子自 ProgressLog 派生（工单 07 接线，当前恒 0）。
+#[derive(Debug, PartialEq)]
+pub struct TaskProgress {
+    pub completed_minutes: u32,
+    pub total_minutes: u32,
+}
+
+impl TaskProgress {
+    /// 百分比（0–100）；总耗时为 0 视为 0（validate 已保证有子目标时 > 0，纯防御）
+    pub fn percent(&self) -> f64 {
+        if self.total_minutes == 0 {
+            0.0
+        } else {
+            self.completed_minutes as f64 * 100.0 / self.total_minutes as f64
+        }
+    }
 }
 
 impl PlanDraft {
@@ -193,7 +252,14 @@ impl PlanDraft {
                 return Err(PlanError::TaskNeedsDuration { index: i });
             }
             if t.has_subgoals {
-                return Err(PlanError::SubGoalsRequired { index: i });
+                if t.subgoals.is_empty() {
+                    return Err(PlanError::SubGoalsRequired { index: i });
+                }
+                for (j, s) in t.subgoals.iter().enumerate() {
+                    if s.name.trim().is_empty() || s.estimated_minutes == 0 {
+                        return Err(PlanError::SubGoalInvalid { task_index: i, subgoal_index: j });
+                    }
+                }
             }
         }
         Ok(())
@@ -207,6 +273,7 @@ impl PlanService {
     /// 创建计划与全部任务（同一事务）；简述留空回退为名称。返回新计划 id。
     pub fn create(conn: &Connection, clock: &dyn Clock, new: &PlanDraft) -> Result<i64, PlanError> {
         new.validate()?;
+        check_dep_indices(&new.tasks)?;
         let now = clock.now().to_rfc3339();
         let tx = conn.unchecked_transaction().map_err(db_err)?;
         tx.execute(
@@ -224,9 +291,11 @@ impl PlanService {
         )
         .map_err(db_err)?;
         let plan_id = tx.last_insert_rowid();
+        let mut ids: Vec<i64> = Vec::with_capacity(new.tasks.len());
         for (pos, t) in new.tasks.iter().enumerate() {
-            insert_task(&tx, plan_id, t, pos as i32, &now)?;
+            ids.push(insert_task(&tx, plan_id, t, pos as i32, &now)?);
         }
+        link_draft_deps(&tx, &new.tasks, &ids)?;
         tx.commit().map_err(db_err)?;
         Ok(plan_id)
     }
@@ -235,6 +304,7 @@ impl PlanService {
     /// 不变量（README 增删改规则 + spec 用户故事 9–12）：
     /// 优先级开始后锁定；已完成任务内容锁定；任务集与库一致（删除显式走 delete_task）；
     /// 落库顺序 = 未完成按提交序在前、已完成按库内序沉底。
+    /// 子目标全量替换（update_subgoals）；依赖边全量替换（DependencyEditor 所见即所存）。
     pub fn update(
         conn: &Connection,
         clock: &dyn Clock,
@@ -242,6 +312,7 @@ impl PlanService {
         draft: &PlanDraft,
     ) -> Result<(), PlanError> {
         draft.validate()?;
+        check_dep_indices(&draft.tasks)?;
         let (db_priority, status) = conn
             .query_row(
                 "SELECT priority, status FROM plans WHERE id = ?1",
@@ -268,11 +339,16 @@ impl PlanService {
             .map(|(_, t)| t.id)
             .collect();
         let is_completed = |t: &TaskDraft| t.id.is_some_and(|id| completed.contains(&id));
-        let mut ordered: Vec<&TaskDraft> = draft.tasks.iter().filter(|t| !is_completed(t)).collect();
+        let mut ordered: Vec<(usize, &TaskDraft)> = draft
+            .tasks
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| !is_completed(t))
+            .collect();
         // 已完成不可拖：顺序以库内 position 为准，而非提交序
         for id in &completed {
-            if let Some(t) = draft.tasks.iter().find(|t| t.id == Some(*id)) {
-                ordered.push(t);
+            if let Some((di, t)) = draft.tasks.iter().enumerate().find(|(_, t)| t.id == Some(*id)) {
+                ordered.push((di, t));
             }
         }
 
@@ -291,7 +367,9 @@ impl PlanService {
             ],
         )
         .map_err(db_err)?;
-        for (pos, t) in ordered.iter().enumerate() {
+        // 依赖解析用：草稿下标 → 实际任务 id（新任务用插入返回的 rowid）
+        let mut id_of: Vec<i64> = vec![0; draft.tasks.len()];
+        for (pos, (di, t)) in ordered.iter().enumerate() {
             match t.id {
                 Some(id) => {
                     tx.execute(
@@ -308,10 +386,20 @@ impl PlanService {
                         ],
                     )
                     .map_err(db_err)?;
+                    update_subgoals(&tx, id, t, *di, &now)?;
+                    id_of[*di] = id;
                 }
-                None => insert_task(&tx, plan_id, t, pos as i32, &now)?,
+                None => id_of[*di] = insert_task(&tx, plan_id, t, pos as i32, &now)?,
             }
         }
+        // 依赖边全量替换：先清本计划旧边（不变量保证边只在计划内，按后继覆盖即可），再按草稿重建
+        tx.execute(
+            "DELETE FROM task_dependencies
+             WHERE successor_id IN (SELECT id FROM tasks WHERE plan_id = ?1)",
+            params![plan_id],
+        )
+        .map_err(db_err)?;
+        link_draft_deps(&tx, &draft.tasks, &id_of)?;
         tx.commit().map_err(db_err)?;
         Ok(())
     }
@@ -333,9 +421,11 @@ impl PlanService {
         Ok(plan)
     }
 
-    /// 软删除任务进归档（deleted_at 落删除时刻）；确认弹窗在 UI，这里是权威通道。
+    /// 软删除任务进归档（deleted_at 落删除时刻）并自动解除其依赖边（后继解锁）；
+    /// 确认弹窗在 UI，这里是权威通道。
     pub fn delete_task(conn: &Connection, clock: &dyn Clock, task_id: i64) -> Result<(), PlanError> {
-        let n = conn
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
+        let n = tx
             .execute(
                 "UPDATE tasks SET deleted_at = ?1 WHERE id = ?2 AND deleted_at IS NULL",
                 params![clock.now().to_rfc3339(), task_id],
@@ -344,6 +434,8 @@ impl PlanService {
         if n == 0 {
             return Err(PlanError::NotFound); // 不存在或已删除，一律 NotFound（幂等）
         }
+        DependencyService::detach_task(&tx, task_id)?;
+        tx.commit().map_err(db_err)?;
         Ok(())
     }
 
@@ -371,16 +463,35 @@ impl PlanService {
         });
         Ok(plans)
     }
+
+    /// 任务派生进度（ADR-0002）：改耗时/增删未完成子目标后自动缩放——
+    /// 分子（已完成分钟）不变、分母（总量）随编辑变化。无子目标任务分子恒 0（07 接 ProgressLog）。
+    pub fn task_progress(conn: &Connection, task_id: i64) -> Result<TaskProgress, PlanError> {
+        conn.query_row(
+            "SELECT estimated_minutes,
+                    (SELECT COALESCE(SUM(estimated_minutes), 0) FROM subgoals
+                     WHERE task_id = tasks.id AND completed_at IS NOT NULL)
+             FROM tasks WHERE id = ?1 AND deleted_at IS NULL",
+            params![task_id],
+            |row| {
+                Ok(TaskProgress {
+                    completed_minutes: row.get(1)?,
+                    total_minutes: row.get::<_, Option<u32>>(0)?.unwrap_or(0),
+                })
+            },
+        )
+        .map_err(notfound_or_db)
+    }
 }
 
-/// 插入一张任务卡（create 与 update 追加共用；新任务状态恒为未开始）。
+/// 插入一张任务卡（create 与 update 追加共用；新任务状态恒为未开始），连带子目标，返回新任务 id。
 fn insert_task(
     conn: &Connection,
     plan_id: i64,
     t: &TaskDraft,
     position: i32,
     now: &str,
-) -> Result<(), PlanError> {
+) -> Result<i64, PlanError> {
     conn.execute(
         "INSERT INTO tasks (plan_id, name, summary, detail, has_subgoals, estimated_minutes, position, status, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -397,19 +508,137 @@ fn insert_task(
         ],
     )
     .map_err(db_err)?;
+    let task_id = conn.last_insert_rowid();
+    if t.has_subgoals {
+        for (pos, s) in t.subgoals.iter().enumerate() {
+            insert_subgoal(conn, task_id, s, pos as i32, now)?;
+        }
+    }
+    Ok(task_id)
+}
+
+/// 插入一行子目标（insert_task 与 update_subgoals 追加共用；新行恒为未完成）。
+fn insert_subgoal(
+    conn: &Connection,
+    task_id: i64,
+    s: &SubGoalDraft,
+    position: i32,
+    now: &str,
+) -> Result<(), PlanError> {
+    conn.execute(
+        "INSERT INTO subgoals (task_id, name, estimated_minutes, position, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![task_id, s.name.trim(), s.estimated_minutes, position, now],
+    )
+    .map_err(db_err)?;
     Ok(())
 }
 
-/// 无子目标任务的落库耗时；有子目标时由子目标求和（工单 04），当前恒 None。
+/// 编辑态子目标全量落库（任务行的 estimated_minutes 由外层 UPDATE 以 effective_minutes 归一）：
+/// 已完成锁定（必须原样在场，否则 SubGoalLocked）；未完成可改可删（从草稿消失 = 删除）；
+/// 新行按草稿序追加在已完成之后；取消勾选（has_subgoals=false）= 清空全部。
+fn update_subgoals(
+    conn: &Connection,
+    task_id: i64,
+    t: &TaskDraft,
+    task_index: usize,
+    now: &str,
+) -> Result<(), PlanError> {
+    let existing = load_subgoals(conn, task_id)?;
+    if !t.has_subgoals {
+        // UI 取消勾选已弹确认；已完成子目标不允许随清空消失（进度锁定）
+        if existing.iter().any(|s| s.completed) {
+            return Err(PlanError::SubGoalLocked { task_index });
+        }
+        conn.execute("DELETE FROM subgoals WHERE task_id = ?1", params![task_id])
+            .map_err(db_err)?;
+        return Ok(());
+    }
+    for s in existing.iter().filter(|s| s.completed) {
+        let unchanged = t.subgoals.iter().any(|d| {
+            d.id == Some(s.id) && d.name.trim() == s.name && d.estimated_minutes == s.estimated_minutes
+        });
+        if !unchanged {
+            return Err(PlanError::SubGoalLocked { task_index });
+        }
+    }
+    // id 归属预检：草稿携带的已知 id 必须属于本任务（跨任务/伪造 id 拒绝，防越权改行）
+    for (j, d) in t.subgoals.iter().enumerate() {
+        if d.id.is_some_and(|id| !existing.iter().any(|s| s.id == id)) {
+            return Err(PlanError::SubGoalInvalid { task_index, subgoal_index: j });
+        }
+    }
+    // 位置归一化：已完成按库内序在前（按序勾选保证其为前缀），未完成（含新行）按草稿序追加
+    let mut ordered: Vec<&SubGoalDraft> = Vec::with_capacity(t.subgoals.len());
+    for s in existing.iter().filter(|s| s.completed) {
+        if let Some(d) = t.subgoals.iter().find(|d| d.id == Some(s.id)) {
+            ordered.push(d);
+        }
+    }
+    let is_done = |d: &SubGoalDraft| {
+        d.id.is_some_and(|id| existing.iter().any(|s| s.id == id && s.completed))
+    };
+    ordered.extend(t.subgoals.iter().filter(|d| !is_done(d)));
+    // 库中未完成但草稿未提交 = 单条删除（UI 已确认）
+    for s in existing.iter().filter(|s| !s.completed) {
+        if !t.subgoals.iter().any(|d| d.id == Some(s.id)) {
+            conn.execute("DELETE FROM subgoals WHERE id = ?1", params![s.id])
+                .map_err(db_err)?;
+        }
+    }
+    for (pos, d) in ordered.iter().enumerate() {
+        match d.id {
+            Some(id) => {
+                conn.execute(
+                    "UPDATE subgoals SET name = ?1, estimated_minutes = ?2, position = ?3 WHERE id = ?4",
+                    params![d.name.trim(), d.estimated_minutes, pos as i32, id],
+                )
+                .map_err(db_err)?;
+            }
+            None => insert_subgoal(conn, task_id, d, pos as i32, now)?,
+        }
+    }
+    Ok(())
+}
+
+/// 依赖下标预检：越界在开事务/解析前拒绝（自指由环检测拒绝），避免解析时越界 panic。
+fn check_dep_indices(tasks: &[TaskDraft]) -> Result<(), PlanError> {
+    for (i, t) in tasks.iter().enumerate() {
+        if t.depends_on.iter().any(|&pi| pi >= tasks.len()) {
+            return Err(PlanError::DependencyInvalid { task_index: i });
+        }
+    }
+    Ok(())
+}
+
+/// 草稿依赖 → 真实边：按下标取已解析的 id 逐条 link（同计划/自指/环校验在 link 内），
+/// 环错误补上所属草稿任务下标供前端定位。
+fn link_draft_deps(conn: &Connection, tasks: &[TaskDraft], ids: &[i64]) -> Result<(), PlanError> {
+    for (i, t) in tasks.iter().enumerate() {
+        for &pi in &t.depends_on {
+            DependencyService::link(conn, ids[pi], ids[i]).map_err(|e| match e {
+                PlanError::DependencyCycle { task_index: None } => {
+                    PlanError::DependencyCycle { task_index: Some(i) }
+                }
+                e => e,
+            })?;
+        }
+    }
+    Ok(())
+}
+
+/// 任务的落库耗时：无子目标 = 手填值；有子目标 = 子目标求和（estimated_minutes 冗余存总量，
+/// 列表/进度免 join；子目标变更时由同一 UPDATE 归一）。
 fn effective_minutes(t: &TaskDraft) -> Option<u32> {
     if t.has_subgoals {
-        None
+        Some(t.subgoals.iter().map(|s| s.estimated_minutes).sum())
     } else {
         t.estimated_minutes
     }
 }
 
 /// 加载未软删除任务（plan_filter 为 None 取全部计划），返回 (plan_id, TaskView)，按 position 排序。
+/// 每张任务连带子目标与前置 id（load_tasks 是视图装配的唯一入口，列表与详情同构）。
 fn load_tasks(conn: &Connection, plan_filter: Option<i64>) -> Result<Vec<(i64, TaskView)>, PlanError> {
     // Option<i64> 自身实现 ToSql（Some → 值），借 plan_filter 避免臂内临时值的生命周期问题
     let (sql, binds): (&str, Vec<&dyn rusqlite::ToSql>) = if plan_filter.is_some() {
@@ -425,12 +654,38 @@ fn load_tasks(conn: &Connection, plan_filter: Option<i64>) -> Result<Vec<(i64, T
             Vec::new(),
         )
     };
-    conn.prepare(sql)
+    let mut tasks: Vec<(i64, TaskView)> = conn
+        .prepare(sql)
         .map_err(db_err)?
         .query_map(binds.as_slice(), task_row)
         .map_err(db_err)?
         .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(db_err)
+        .map_err(db_err)?;
+    for (_, task) in tasks.iter_mut() {
+        task.subgoals = load_subgoals(conn, task.id)?;
+        let mut stmt = conn
+            .prepare("SELECT predecessor_id FROM task_dependencies WHERE successor_id = ?1")
+            .map_err(db_err)?;
+        task.prerequisite_ids = stmt
+            .query_map(params![task.id], |row| row.get::<_, i64>(0))
+            .map_err(db_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_err)?;
+    }
+    Ok(tasks)
+}
+
+/// 加载任务的子目标（按 position 排序 = 填写顺序）。
+fn load_subgoals(conn: &Connection, task_id: i64) -> Result<Vec<SubGoalView>, PlanError> {
+    conn.prepare(
+        "SELECT id, name, estimated_minutes, position, completed_at IS NOT NULL
+         FROM subgoals WHERE task_id = ?1 ORDER BY position",
+    )
+    .map_err(db_err)?
+    .query_map(params![task_id], subgoal_row)
+    .map_err(db_err)?
+    .collect::<rusqlite::Result<Vec<_>>>()
+    .map_err(db_err)
 }
 
 /// plans 表行 → PlanView（tasks 由调用方填充）
@@ -450,8 +705,8 @@ fn plan_row(row: &Row) -> rusqlite::Result<PlanView> {
     })
 }
 
-/// tasks 表行 → (所属 plan_id, TaskView)
-fn task_row(row: &Row) -> rusqlite::Result<(i64, TaskView)> {
+/// tasks 表行 → (所属 plan_id, TaskView)（subgoals/prerequisite_ids 由 load_tasks 装配）
+pub(crate) fn task_row(row: &Row) -> rusqlite::Result<(i64, TaskView)> {
     Ok((
         row.get(1)?,
         TaskView {
@@ -463,8 +718,21 @@ fn task_row(row: &Row) -> rusqlite::Result<(i64, TaskView)> {
             estimated_minutes: row.get(6)?,
             position: row.get(7)?,
             status: TaskStatus::from_db(&row.get::<_, String>(8)?),
+            subgoals: Vec::new(),
+            prerequisite_ids: Vec::new(),
         },
     ))
+}
+
+/// subgoals 表行 → SubGoalView（completed_at IS NOT NULL 由 SQL 算好）
+fn subgoal_row(row: &Row) -> rusqlite::Result<SubGoalView> {
+    Ok(SubGoalView {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        estimated_minutes: row.get(2)?,
+        position: row.get(3)?,
+        completed: row.get::<_, i64>(4)? != 0,
+    })
 }
 
 /// 任务集一致性：提交的已知 id 集合必须与库中现存任务一致（README：删除必须显式走 delete_task）。
@@ -519,7 +787,8 @@ fn notfound_or_db(e: rusqlite::Error) -> PlanError {
     }
 }
 
-/// rusqlite 错误归入领域错误的兜底分支（校验错误之外的存储故障）
-fn db_err(e: rusqlite::Error) -> PlanError {
+/// rusqlite 错误归入领域错误的兜底分支（校验错误之外的存储故障）；
+/// pub(crate)：deps 等同 crate 领域模块复用同一兜底
+pub(crate) fn db_err(e: rusqlite::Error) -> PlanError {
     PlanError::Storage(format!("{e}"))
 }

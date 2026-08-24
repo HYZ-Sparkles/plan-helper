@@ -58,4 +58,20 @@ CREATE TABLE IF NOT EXISTS tasks (
     deleted_at        TEXT,                        -- 软删除（非 NULL = 已归档）
     created_at        TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS subgoals (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id           INTEGER NOT NULL REFERENCES tasks(id),
+    name              TEXT NOT NULL,
+    estimated_minutes INTEGER NOT NULL,            -- 必填（CONTEXT 精简输入行）
+    position          INTEGER NOT NULL,            -- 任务内顺序 = 填写顺序，不可拖拽
+    completed_at      TEXT,                        -- 非 NULL = 已完成（记录完成时刻，07 接线）
+    created_at        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS task_dependencies (
+    predecessor_id INTEGER NOT NULL REFERENCES tasks(id), -- 前置任务（A）
+    successor_id   INTEGER NOT NULL REFERENCES tasks(id), -- 后继任务（B，依赖 A）
+    PRIMARY KEY (predecessor_id, successor_id)
+);
 ";

@@ -5,7 +5,7 @@ use chrono::{Local, TimeZone};
 
 use plan_helper_lib::clock::FixedClock;
 use plan_helper_lib::domain::plans::{
-    PlanDraft, PlanError, PlanService, PlanStatus, Priority, TaskDraft, TaskStatus,
+    PlanDraft, PlanError, PlanService, PlanStatus, Priority, SubGoalDraft, TaskDraft, TaskStatus,
 };
 use plan_helper_lib::infra::db;
 
@@ -14,7 +14,7 @@ fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> FixedClock {
     FixedClock(Local.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap())
 }
 
-/// 任务草稿快捷构造（无 id = 新任务）
+/// 任务草稿快捷构造（无 id = 新任务；无子目标、无依赖）
 fn task(name: &str, minutes: u32) -> TaskDraft {
     TaskDraft {
         id: None,
@@ -23,6 +23,8 @@ fn task(name: &str, minutes: u32) -> TaskDraft {
         detail: String::new(),
         has_subgoals: false,
         estimated_minutes: Some(minutes),
+        subgoals: Vec::new(),
+        depends_on: Vec::new(),
     }
 }
 
@@ -60,6 +62,16 @@ fn draft_of(p: &plan_helper_lib::domain::plans::PlanView) -> PlanDraft {
                 detail: t.detail.clone(),
                 has_subgoals: t.has_subgoals,
                 estimated_minutes: t.estimated_minutes,
+                subgoals: t
+                    .subgoals
+                    .iter()
+                    .map(|s| SubGoalDraft {
+                        id: Some(s.id),
+                        name: s.name.clone(),
+                        estimated_minutes: s.estimated_minutes,
+                    })
+                    .collect(),
+                depends_on: Vec::new(),
             })
             .collect(),
     }
