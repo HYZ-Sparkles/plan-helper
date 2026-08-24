@@ -56,8 +56,7 @@ CREATE TABLE IF NOT EXISTS plans (
     due_date     TEXT,                             -- 仅展示，YYYY-MM-DD
     status       TEXT NOT NULL DEFAULT 'NotStarted',
     created_at   TEXT NOT NULL,                    -- RFC3339
-    pause_reason TEXT,                             -- 非 NULL = 暂停原因：UserInitiated | AutoPreempted
-    sort_override INTEGER                           -- 手动排序（工单 05），NULL = 默认排序
+    pause_reason TEXT                              -- 非 NULL = 暂停原因：UserInitiated | AutoPreempted
 );
 
 CREATE TABLE IF NOT EXISTS tasks (

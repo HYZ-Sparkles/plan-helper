@@ -100,10 +100,3 @@ pub fn copy_plan_as_new(state: State<'_, AppState>, plan_id: i64) -> Result<i64,
     let conn = state.db.lock().unwrap();
     LifecycleService::copy_as_new(&conn, state.clock.as_ref(), plan_id)
 }
-
-/// 计划列表手动排序持久化（完整顺序）。
-#[tauri::command]
-pub fn set_plan_order(state: State<'_, AppState>, ordered_ids: Vec<i64>) -> Result<(), PlanError> {
-    let conn = state.db.lock().unwrap();
-    PlanService::set_order(&conn, &ordered_ids)
-}

@@ -27,8 +27,7 @@
   - `update(conn, clock, plan_id, &PlanDraft) -> Result<(), PlanError>`（工单 03/04）— 整计划编辑（CreationUI 编辑态）。不变量：计划开始后优先级锁定（PriorityLocked）；已完成任务内容锁定（TaskLocked，position 除外）；提交任务集必须与库一致（TaskSetMismatch，删除显式走 delete_task）；落库顺序 = 未完成按提交序在前、已完成按库内序沉底（新任务自然落在所有未完成之后）；子目标全量替换（`update_subgoals`：已完成锁定 SubGoalLocked、未完成可改可删、新行追加在后、取消勾选=清空）；依赖边全量替换（草稿所见即所存）
   - `get(conn, plan_id) -> Result<PlanView, PlanError>` — 单计划详情（含任务+子目标+前置 id，按 position）；不存在 NotFound
   - `delete_task(conn, clock, task_id) -> Result<(), PlanError>` — 软删除进归档（deleted_at 落删除时刻）并自动解除依赖边（后继解锁）；不存在/已删 NotFound
-  - `list(conn) -> Result<Vec<PlanView>, PlanError>` — 全部计划+嵌套任务（软删除过滤），排序（工单 05 PlanOrdering）：手动序优先（sort_override 非 NULL 按 override 升序在前，手动调整过即接管全局）、其后按默认规则 Priority 降序 → CreatedAt 倒序 → id 倒序；错误统一走 PlanError 通道
-  - `set_order(conn, &ordered_ids) -> Result<(), PlanError>`（工单 05）— 手动排序持久化：先全部置 NULL 再按传入顺序写 0..n；前端传全部计划的完整顺序（过滤视图内拖拽由前端并回全量序），一次拖拽即接管全局排序
+  - `list(conn) -> Result<Vec<PlanView>, PlanError>` — 全部计划+嵌套任务（软删除过滤），按 PlanOrdering 默认规则（唯一排序，2026-08-24 决策砍掉手动覆盖）：Priority 降序 → CreatedAt 倒序 → id 倒序；错误统一走 PlanError 通道
   - `task_progress(conn, task_id) -> Result<TaskProgress, PlanError>`（工单 04）— 派生进度（ADR-0002）：(已完成分钟, 总分钟)，`percent()` 供展示/断言；改耗时/增删未完成子目标后自动缩放（分子不变分母变）；无子目标任务分子 07 接 ProgressLog
   - `PlanDraft` / `TaskDraft`（含 `subgoals`、`depends_on` 草稿下标引用）/ `SubGoalDraft` — 创建与编辑共用草稿（id 为 None = 新行）
   - `PlanError` — 结构化领域错误（serde tag=kind/content=payload），前端文案见 `src/lib/labels.ts#planErrorMessage`；工单 05 新增 PlanStatusInvalid{from} / PlanNotTerminal{from} / TasksNotCompleted
@@ -62,14 +61,14 @@
 - `get_plan(plan_id) -> Result<PlanView, PlanError>` — 前端 `getPlan`（工单 03 详情页）
 - `update_plan(plan_id, draft: PlanDraft) -> Result<(), PlanError>` — 前端 `updatePlan`（编辑态保存）
 - `delete_task(task_id) -> Result<(), PlanError>` — 前端 `deleteTask`（软删除 + 解除依赖，确认弹窗在 UI）
-- 工单 05 生命周期：`start_plan` / `pause_plan` / `resume_plan` / `complete_plan` / `abort_plan` / `copy_plan_as_new(->新计划id)` / `set_plan_order(ordered_ids)` — 前端 `src/lib/api.ts` 同名包装；状态机与校验全在 domain::lifecycle
+- 工单 05 生命周期：`start_plan` / `pause_plan` / `resume_plan` / `complete_plan` / `abort_plan` / `copy_plan_as_new(->新计划id)` — 前端 `src/lib/api.ts` 同名包装；状态机与校验全在 domain::lifecycle（原 `set_plan_order` 已随手动排序砍掉移除，2026-08-24）
 
 ## 测试先例（tests/）
 
 - `seam_settings.rs` — FirstRun 默认值 / 保存往返 / 快照组装
 - `seam_plans.rs` — 创建校验（空任务/缺耗时/空名/子目标必拒）、持久化字段回读、PlanOrdering 排序、文件库重开不丢；工单 03：get/NotFound、编辑字段落库、已开始锁优先级、已完成任务锁定、任务集一致、重排未完成在前已完成沉底、追加任务落位、软删除归档
 - `seam_subgoals.rs`（工单 04）— 子目标：填写顺序落库/estimated=求和、行内容与耗时必填、编辑改/增/删未完成行且新行沉最后、已完成子目标锁定（改名/删除/随清空消失都拒）、取消勾选清空、进度按已完成分钟缩放（60%→42.86%→37.5%→75%）；依赖：下标引用落库与等待判定随完成变化、环/自指/越界拒绝、link 跨计划与长环拒绝、编辑全量替换边（含新任务解析）、删任务双向解除后继解锁
-- `seam_lifecycle.rs`（工单 05）— 状态机 5×4 全矩阵（合法转换落库、非法拒绝 PlanStatusInvalid 且状态不变、终态重启全拒）、不存在 id 全 NotFound、手动暂停记 UserInitiated/继续清空、完成计划前置（有未完成任务/删空拒 TasksNotCompleted，全完成后成功且终态）、任务 100% 自动完成（部分勾选不完成、全勾转已完成、幂等、无子目标不误判）、复制并新建（字段/任务/子目标/依赖边复制、进度归零、"- 副本"、直接进行中、旧计划保持终态、新计划优先级锁定、非终态拒 PlanNotTerminal）、手动排序（倒序接管默认序、新建计划落其后、重排覆盖、重开库不丢）
+- `seam_lifecycle.rs`（工单 05）— 状态机 5×4 全矩阵（合法转换落库、非法拒绝 PlanStatusInvalid 且状态不变、终态重启全拒）、不存在 id 全 NotFound、手动暂停记 UserInitiated/继续清空、完成计划前置（有未完成任务/删空拒 TasksNotCompleted，全完成后成功且终态）、任务 100% 自动完成（部分勾选不完成、全勾转已完成、幂等、无子目标不误判）、复制并新建（字段/任务/子目标/依赖边复制、进度归零、"- 副本"、直接进行中、旧计划保持终态、新计划优先级锁定、非终态拒 PlanNotTerminal）；手动排序测试已随功能砍掉移除（2026-08-24，默认排序断言在 seam_plans）
 - 直接 `db::open_in_memory()` + `FixedClock` 驱动领域服务，断言可观察输出
 - 共用测试助手在 `tests/common/mod.rs`（`at` / `plain_task` / `draft_of` / `force_plan_status` / `force_task_status` / `force_subgoal_completed`）——各 seam 二进制 `mod common; use common::*;` 引入，不再逐文件拷贝
 - 前置状态用 SQL 直改（`force_task_status`/`force_plan_status`/`force_subgoal_completed`）：汇报与状态机接线前的种子

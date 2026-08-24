@@ -40,8 +40,7 @@ pub fn run() {
             commands::resume_plan,
             commands::complete_plan,
             commands::abort_plan,
-            commands::copy_plan_as_new,
-            commands::set_plan_order
+            commands::copy_plan_as_new
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

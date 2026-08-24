@@ -174,8 +174,3 @@ export function abortPlan(planId: number): Promise<void> {
 export function copyPlanAsNew(planId: number): Promise<number> {
   return invoke<number>("copy_plan_as_new", { planId });
 }
-
-/** 计划列表手动排序持久化（传全部计划的完整顺序） */
-export function setPlanOrder(orderedIds: number[]): Promise<void> {
-  return invoke<void>("set_plan_order", { orderedIds });
-}

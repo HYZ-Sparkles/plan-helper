@@ -42,23 +42,25 @@
     </CollapsibleSection>
 
     <CollapsibleSection title="任务列表" :badge="tasks.length" :default-open="false">
-      <div class="tasks">
+      <div ref="tasksEl" class="tasks" :class="{ 'drag-live': drag.active }">
         <p v-if="tasks.length === 0" class="hint">还没有任务。计划保存时至少需要 1 个任务。</p>
         <article
           v-for="(task, i) in tasks"
-          :key="task.id ?? `new-${i}`"
+          :key="task.key"
           class="task-card"
-          :class="{ expanded: !task.collapsed, dragging: dragFrom === i, locked: isLocked(task), 'drop-hint': dragOver === i && dragFrom !== i }"
+          :class="{
+            expanded: !task.collapsed,
+            dragging: drag.active && drag.index === i,
+            settling: drag.settling && drag.index === i,
+            locked: isLocked(task),
+          }"
+          :style="cardStyle(i)"
         >
-          <!-- 常驻摘要行：拖拽手柄 + 名称 + 耗时/子目标标记 + 删除；点行展开 -->
+          <!-- 常驻摘要行：整行可拖（手柄是视觉提示）+ 名称 + 耗时/子目标标记 + 删除；点行展开 -->
           <header
             class="task-line"
-            :draggable="draggable(task)"
-            @click="task.collapsed = !task.collapsed"
-            @dragstart="onDragStart(i, $event)"
-            @dragover.prevent="dragOver = i"
-            @drop="onDrop(i)"
-            @dragend="onDragEnd"
+            @pointerdown="onLinePointerDown(i, $event)"
+            @click="onLineClick(task)"
           >
             <PhDotsSixVertical v-if="draggable(task)" class="drag-handle" :size="16" />
             <span class="task-name" :class="{ unnamed: !task.name.trim() }">
@@ -402,30 +404,119 @@ function draggable(task: TaskForm): boolean {
   return !isLocked(task);
 }
 
-/* ---- 拖拽排序（创建与编辑同一交互；HTML5 DnD，落点交换） ---- */
-const dragFrom = ref(-1);
-/** 当前悬停的目标卡（drop-hint 高亮）；-1 = 无 */
-const dragOver = ref(-1);
+/* ---- 指针拖拽排序（2026-08-24 共识：连续流动，无显式磁吸）----
+   整行可拖 + 手柄仅作视觉提示；点击（展开/收起）与拖拽用位移阈值区分；
+   未完成任务是连续前缀（新任务插在已完成块之前），已锁定块沉底不动也不让位。 */
+const tasksEl = ref<HTMLElement>();
+/** 拖拽会话：index = 拖的卡、active = 已越过阈值、dy = 指针位移、drop = 流动预览槽位、settling = 松手滑入中 */
+const drag = reactive({ index: -1, active: false, settling: false, dy: 0, drop: -1 });
+/** 起拖时快照：各卡中心（视口坐标）与被拖卡高度——槽位几何在松手提交前不变 */
+let slotCenters: number[] = [];
+let rowHeight = 0;
+let rowGap = 0;
+let startY = 0;
+/** 未完成任务数（可拖/可让位的前缀长度；已锁定任务加载时必然沉底成后缀） */
+let movableCount = 0;
+/** 松手滑入动画的收尾计时器；新一次按下会先提交未完成的收尾 */
+let settleTimer: number | undefined;
+/** 真拖拽后的第一次 click 只吞掉（不切换展开） */
+let suppressClick = false;
+/** 起拖阈值：位移超过它才算拖拽，否则视为摘要行上的普通点击 */
+const DRAG_THRESHOLD = 4;
 
-function onDragStart(i: number, e: DragEvent) {
-  dragFrom.value = i;
-  e.dataTransfer!.effectAllowed = "move";
+/** 摘要行按下：快照几何、捕获指针（出窗口不丢事件）；交互元素（删除钮等）不触发 */
+function onLinePointerDown(i: number, e: PointerEvent) {
+  if (e.button !== 0 || !tasksEl.value || !draggable(tasks[i])) return;
+  if ((e.target as HTMLElement).closest("button, input, textarea, label")) return;
+  commitDrop();
+  const cards = Array.from(tasksEl.value.children).filter((el) => el.classList.contains("task-card"));
+  const rects = cards.map((el) => (el as HTMLElement).getBoundingClientRect());
+  slotCenters = rects.map((r) => r.top + r.height / 2);
+  rowHeight = rects[i].height;
+  rowGap = rects.length > 1 ? rects[1].top - (rects[0].top + rects[0].height) : 0;
+  startY = e.clientY;
+  movableCount = tasks.filter((t) => !isLocked(t)).length;
+  drag.index = i;
+  drag.drop = i;
+  const line = e.currentTarget as HTMLElement;
+  line.setPointerCapture(e.pointerId);
+  line.addEventListener("pointermove", onLinePointerMove);
+  line.addEventListener("pointerup", onLinePointerUp);
+  line.addEventListener("pointercancel", onLinePointerUp);
 }
-function onDrop(i: number) {
-  const from = dragFrom.value;
-  onDragEnd();
-  if (from < 0 || from === i) return;
-  const [moved] = tasks.splice(from, 1);
-  tasks.splice(i, 0, moved);
+
+/** 指针移动：越过阈值起拖；拖动卡当前中心 → 最近的可让位槽位（锁定块不参与），
+ *  他卡随槽位变化连续平移让位/合拢（CSS 过渡承担流动感） */
+function onLinePointerMove(e: PointerEvent) {
+  drag.dy = e.clientY - startY;
+  if (!drag.active && Math.abs(drag.dy) <= DRAG_THRESHOLD) return;
+  drag.active = true;
+  const centerNow = slotCenters[drag.index] + drag.dy;
+  let nearest = 0;
+  for (let j = 1; j < movableCount; j++) {
+    if (Math.abs(centerNow - slotCenters[j]) < Math.abs(centerNow - slotCenters[nearest])) nearest = j;
+  }
+  drag.drop = nearest;
 }
-function onDragEnd() {
-  dragFrom.value = -1;
-  dragOver.value = -1;
+
+/** 指针抬起：摘监听；纯点击交回 click 展开，真拖拽切换为滑入动画后提交 */
+function onLinePointerUp(e: PointerEvent) {
+  const line = e.currentTarget as HTMLElement;
+  line.removeEventListener("pointermove", onLinePointerMove);
+  line.removeEventListener("pointerup", onLinePointerUp);
+  line.removeEventListener("pointercancel", onLinePointerUp);
+  if (!drag.active) return;
+  suppressClick = true;
+  drag.dy = slotCenters[drag.drop] - slotCenters[drag.index]; // 目标：滑入预览槽位
+  drag.settling = true; // 跟手时无过渡，此刻起开启过渡
+  settleTimer = window.setTimeout(commitDrop, 170);
+}
+
+/** 拖拽收尾：数组落位（key 稳定，DOM 随之移动到与视觉一致的位置）并复位会话 */
+function commitDrop() {
+  window.clearTimeout(settleTimer);
+  if (drag.index < 0) return;
+  const { index, drop } = drag;
+  drag.index = -1;
+  drag.drop = -1;
+  drag.active = false;
+  drag.settling = false;
+  drag.dy = 0;
+  if (index !== drop) {
+    const [moved] = tasks.splice(index, 1);
+    tasks.splice(drop, 0, moved);
+  }
+}
+
+/** 拖拽中的卡位移：被拖卡跟手（无过渡）/滑入（过渡），区间内他卡 ± 一个被拖卡高让位 */
+function cardStyle(i: number) {
+  if (!drag.active || drag.index < 0) return undefined;
+  let offset: number | undefined;
+  if (i === drag.index) {
+    offset = drag.dy;
+  } else {
+    const shift = rowHeight + rowGap;
+    if (drag.index < drag.drop && i > drag.index && i <= drag.drop) offset = -shift;
+    else if (drag.drop < drag.index && i >= drag.drop && i < drag.index) offset = shift;
+  }
+  if (offset == null) return undefined;
+  return { transform: `translateY(${offset}px)`, zIndex: i === drag.index ? 10 : 1 };
+}
+
+/** 摘要行点击 = 展开/收起；拖拽手势刚结束的那次 click 吞掉不切换 */
+function onLineClick(task: TaskForm) {
+  if (suppressClick) {
+    suppressClick = false;
+    return;
+  }
+  task.collapsed = !task.collapsed;
 }
 
 /* ---- 任务增删 ---- */
+
+/** 追加任务：插在所有未完成任务之后、已完成块之前（与服务端落库顺序一致，spec 用户故事 9） */
 function addTask() {
-  tasks.push(blankTask());
+  tasks.splice(tasks.filter((t) => !isLocked(t)).length, 0, blankTask());
 }
 
 /** 待删除任务的下标（null = 无弹窗）；只有已入库任务走打字确认 */
@@ -715,23 +806,37 @@ async function save() {
 }
 
 .task-card {
+  position: relative; /* 拖拽时被拖卡需置顶浮起 */
   border: var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-group);
   overflow: hidden;
+  transition: transform 0.15s; /* 他卡让位/合拢与松手归位的流动感 */
 }
 
+/* 拖拽进行中：整列表禁选中、摘要行变抓取光标 */
+.tasks.drag-live {
+  user-select: none;
+}
+
+.tasks.drag-live .task-line {
+  cursor: grabbing;
+}
+
+/* 被拖卡：半透明 + 顶部 3px 主色条；跟手位移不能有过渡（会滞后于指针） */
 .task-card.dragging {
   opacity: 0.5;
   box-shadow: inset 0 3px 0 var(--primary);
+  transition: none;
+  z-index: 10;
 }
 
-/* 拖拽悬停落点：目标卡边框亮主色，指示松手后插到的位置 */
-.task-card.drop-hint {
-  border-color: var(--primary);
+/* 松手后：被拖卡以过渡滑入预览槽位，随后 commitDrop 落定 */
+.task-card.settling {
+  transition: transform 0.16s ease-out;
 }
 
-/* 紧凑摘要行（常驻，矮行）：一行放下手柄/名称/标记/操作 */
+/* 紧凑摘要行（常驻，矮行）：一行放下手柄/名称/标记/操作；指针拖拽不被触摸滚动手势抢走 */
 .task-line {
   display: flex;
   align-items: center;
@@ -740,6 +845,7 @@ async function save() {
   padding: 6px 10px;
   cursor: pointer;
   user-select: none;
+  touch-action: none;
 }
 
 .drag-handle {

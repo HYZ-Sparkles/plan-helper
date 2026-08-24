@@ -9,11 +9,11 @@
   - 计划域类型：`Priority` / `PlanStatus` / `TaskStatus` / `PauseReason` 枚举、`PlanDraft` / `TaskDraft`（创建与编辑共用入参，TaskDraft.id 缺省 = 新任务；`subgoals` 子目标行、`depends_on` 前置任务的草稿下标引用）、`SubGoalDraft`、`PlanView`（含 `subgoals` / `prerequisite_ids` / `pause_reason`）/ `TaskView`（含 `subgoals` / `prerequisite_ids`）/ `SubGoalView`、`PlanErrorShape`
   - `getAppState(): Promise<AppStateView>` — 启动快照（设置 + 服务端时间）
   - `createPlan(draft: PlanDraft): Promise<number>` — 创建计划（含任务/子目标/依赖），失败 reject 结构化错误
-  - `listPlans(): Promise<PlanView[]>` — 计划列表（PlanOrdering：手动序优先于默认排序，含嵌套任务）
+  - `listPlans(): Promise<PlanView[]>` — 计划列表（PlanOrdering 默认排序：优先级降序 + 创建倒序，唯一排序；含嵌套任务）
   - `getPlan(planId: number): Promise<PlanView>` — 单个计划详情（工单 03）
   - `updatePlan(planId, draft): Promise<void>` — 整计划编辑保存（编辑态）
   - `deleteTask(taskId): Promise<void>` — 软删除任务进归档（服务端连带解除依赖边；确认弹窗在 UI）
-  - 生命周期（工单 05，状态机在服务层、UI 只按状态展示可得操作）：`startPlan` / `pausePlan` / `resumePlan` / `completePlan` / `abortPlan`（二级确认在 UI）、`copyPlanAsNew(planId): Promise<number>`（返回新计划 id）、`setPlanOrder(orderedIds)`（传全部计划的完整顺序）
+  - 生命周期（工单 05，状态机在服务层、UI 只按状态展示可得操作）：`startPlan` / `pausePlan` / `resumePlan` / `completePlan` / `abortPlan`（二级确认在 UI）、`copyPlanAsNew(planId): Promise<number>`（返回新计划 id）
 - `src/lib/labels.ts` — 领域枚举的中文文案集中地：
   - `priorityLabel` / `statusLabel`（计划与任务状态合一张表，共有值标签一致）/ `pauseReasonLabel`（用户主动 / 自动抢占）映射表
   - `planErrorMessage(err)` — 后端 PlanError（{kind,payload}）→ 用户可读文案
@@ -26,7 +26,7 @@
 
 ## 复用组件（src/components/）
 
-- `CreationForm.vue` — **CreationUI 单页可折叠表单（创建/编辑双模式，工单 03/04）**：`mode: "create" | "edit"` + 编辑态 `plan: PlanView`；任务卡默认收起为一行摘要（拖拽手柄 + 名称 + 耗时/子目标计数）、点行展开、HTML5 拖拽排序、已完成任务锁定、优先级开始后锁定、删已入库任务走打字确认；展开态内含**子目标精简输入行**（内容+耗时、行末 + 与回车加行聚焦、已完成行锁定、取消勾选弹确认清空）与**前置任务多选**（DependencyEditor，次要区域）。emit `saved` / `cancel`。
+- `CreationForm.vue` — **CreationUI 单页可折叠表单（创建/编辑双模式，工单 03/04/05）**：`mode: "create" | "edit"` + 编辑态 `plan: PlanView`；任务卡默认收起为一行摘要（拖拽手柄 + 名称 + 耗时/子目标计数）、点行展开、指针连续流动拖拽排序（见下方页面级要点）、已完成任务锁定、优先级开始后锁定、删已入库任务走打字确认；展开态内含**子目标精简输入行**（内容+耗时、行末 + 与回车加行聚焦、已完成行锁定、取消勾选弹确认清空）与**前置任务多选**（DependencyEditor，次要区域）。emit `saved` / `cancel`。
 - `DependencyEditor.vue` — 前置任务多选胶囊（v-model = 草稿内稳定 key 集）：候选仅同计划其它任务，创建与编辑同一控件；勾选集即依赖边全集（所见即所存）。
 - `TypeConfirmDialog.vue` — 打字确认的危险操作弹窗（默认打「再删」）；父组件 v-if 控制显隐，emit `confirm` / `cancel`。删任务（03）与放弃计划（05）共用。
 - `ConfirmDialog.vue` — 轻量二选一确认弹窗（标题 + 插槽内容 + 取消/确认）；子目标删除/取消勾选（04）、生命周期确认（05）等非打字场景共用。
@@ -47,7 +47,8 @@
 ## 页面级实现要点（不易从文件名看出）
 
 - `PlanDetailPage.vue` — 生命周期按钮矩阵（未开始→开始；进行中→完成计划〔任务全完成后亮起〕/暂停/放弃；已暂停→继续/放弃；终态→复制并新建）；放弃走一级确认（保留多少历史）+ 二级打字「再删」；`runLifecycle` 统一 busy 互斥与错误文案。
-- `PlansPage.vue` — 计划列表指针拖拽排序（半透明 + 3px 主色条、±20px 磁吸、他卡让位）；过滤视图内拖拽由 `persistMove` 并回全量顺序再 `setPlanOrder` 持久化。
+- `PlansPage.vue` — 纯展示列表（无拖拽；2026-08-24 决策砍掉计划手动排序，排序全在服务端默认规则）。
+- `CreationForm.vue` — 任务卡**指针连续流动拖拽**（2026-08-24 共识）：摘要行整行可拖（手柄仅视觉提示）、点击/拖拽按 4px 位移阈值区分（`onLineClick` 吞掉拖拽后的那次 click）、他卡以 transform 过渡连续让位/合拢、松手 `settling` 滑入槽位后 `commitDrop` 落数组；已完成任务锁定不拖不让位（未完成任务恒为前缀），追加任务插在未完成之后/已完成之前。
 
 ## 路由与多窗口
 
