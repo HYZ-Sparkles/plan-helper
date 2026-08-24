@@ -190,6 +190,7 @@ import {
   type TaskStatus,
 } from "../lib/api";
 import { hoursFromMinutes, planErrorMessage, statusLabel } from "../lib/labels";
+import { normalizeDateString } from "../lib/validation";
 
 /** 任务表单行（hours 是输入态字符串，提交时换算分钟；collapsed 是紧凑卡收起态） */
 interface TaskForm {
@@ -336,7 +337,7 @@ function buildDraft(): PlanDraft {
     summary: plan.summary,
     detail: plan.detail,
     priority: plan.priority,
-    due_date: plan.dueDate.trim() || null,
+    due_date: normalizeDateString(plan.dueDate), // 边界兜底：垃圾输入归 null（无截止），合法归一 YYYY-MM-DD
     tasks: tasks.map((t) => ({
       id: t.id,
       name: t.name,
@@ -401,10 +402,17 @@ async function save() {
 .segmented {
   display: inline-flex;
   align-items: stretch;
-  min-height: 36px; /* 与 .input 控件等高，行内两控件基线一致 */
   border: var(--border-default);
   border-radius: var(--radius-sm);
   overflow: hidden;
+}
+
+/* 行内两控件（优先级分段 / 日期输入）严格等高：显式 36px 且统一 border-box——
+   .input 无 border-box，min-height 会算在内容区上导致实际约 52px，比邻控件高一大截 */
+.plan-fields .field-row .segmented,
+.plan-fields .field-row :deep(.date-picker .input) {
+  box-sizing: border-box;
+  height: 36px;
 }
 
 .segmented.locked {

@@ -132,17 +132,36 @@ function toggle() {
   open.value = !open.value;
 }
 
-/** 手动输入实时透传；失焦时归一——合法写法（2026-12-20 / 2026/12/20 / 20261220）统一成 YYYY-MM-DD，非法回退上一个合法值 */
+/** 最近一个合法值（含空串）——失焦时非法输入回退到它，保证表单值永不持有垃圾 */
+const lastValid = ref(normalizeDateString(props.modelValue) ?? "");
+watch(
+  () => props.modelValue,
+  (v) => {
+    const n = normalizeDateString(v);
+    if (n != null) lastValid.value = n;
+  },
+);
+
+/** 手动输入实时透传（中间态可能是垃圾，由失焦归一/回退收口） */
 function onType(e: Event) {
   emit("update:modelValue", (e.target as HTMLInputElement).value);
 }
+/** 失焦收口：空 = 清除；合法写法（2026-12-20 / 2026/12/20 / 20261220）归一；非法整体回退最近合法值 */
 function onBlur(e: FocusEvent) {
   const input = e.target as HTMLInputElement;
-  const normalized = normalizeDateString(input.value);
+  const raw = input.value.trim();
+  if (raw === "") {
+    emit("update:modelValue", "");
+    input.value = "";
+    return;
+  }
+  const normalized = normalizeDateString(raw);
   if (normalized != null) {
     emit("update:modelValue", normalized);
   } else {
-    input.value = props.modelValue; // 非法输入不落地（清空=回空串）
+    // 非法输入不落地：表单值与显示一并回退（此前只回退显示、表单值仍留垃圾会被提交）
+    emit("update:modelValue", lastValid.value);
+    input.value = lastValid.value;
   }
 }
 
@@ -152,8 +171,9 @@ function onDocMouseDown(e: MouseEvent) {
 }
 watch(open, (v) => {
   if (v) {
-    const anchor = props.modelValue ? new Date(`${props.modelValue}T00:00:00`) : new Date();
-    viewMonth.value = startOfMonth(anchor);
+    // 锚点先归一：表单值可能是打字中间态垃圾，直接构造 Date 会得到 Invalid → 月历 NaN
+    const valid = normalizeDateString(props.modelValue);
+    viewMonth.value = startOfMonth(valid ? new Date(`${valid}T00:00:00`) : new Date());
     document.addEventListener("mousedown", onDocMouseDown);
   } else {
     document.removeEventListener("mousedown", onDocMouseDown);
@@ -176,7 +196,6 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMouseDown))
 
 .box .input {
   min-width: 168px;
-  min-height: 36px;
   padding-right: 6px;
 }
 
