@@ -3,7 +3,7 @@
     计划管理（工单 03：状态筛选栏 + 单列表，2026-08-23 grill 修订，取代 4-tab）。
     筛选项六项各带数量，默认「全部」；点击卡片进入计划详情页。
   -->
-  <section>
+  <section class="plans-col">
     <h2 class="page-title">计划管理</h2>
 
     <div class="filter-bar">
@@ -41,7 +41,8 @@
             <PriorityLabel :priority="p.priority" />
             <StatusBadge :status="p.status" />
           </div>
-          <p class="plan-summary">{{ p.summary }}</p>
+          <!-- 简述与名称相同（留空回退的产物）时不重复显示 -->
+          <p v-if="p.summary && p.summary !== p.name" class="plan-summary">{{ p.summary }}</p>
           <p class="plan-meta">
             {{ p.tasks.length }} 个任务 · 合计 {{ totalHours(p) }} 小时
             <template v-if="p.due_date"> · 截止 {{ p.due_date }}</template>
@@ -102,6 +103,13 @@ function totalHours(p: PlanView) {
 </script>
 
 <style scoped>
+/* 内容列：限宽 + 居中（计划卡内容行不长，全宽拉伸反而显得空），窄窗口自动收缩 */
+.plans-col {
+  max-width: 840px;
+  width: 100%;
+  margin: 0 auto;
+}
+
 .filter-bar {
   display: flex;
   flex-wrap: wrap;

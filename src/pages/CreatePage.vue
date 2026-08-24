@@ -14,7 +14,10 @@ const router = useRouter();
 </script>
 
 <style scoped>
+/* 内容列：限宽 + 居中（窗口拉大时空白均分两侧），窄窗口自动收缩 */
 .create-page {
   max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
 }
 </style>

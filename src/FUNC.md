@@ -17,6 +17,8 @@
   - `priorityLabel` / `statusLabel`（计划与任务状态合一张表，共有值标签一致）映射表
   - `planErrorMessage(err)` — 后端 PlanError（{kind,payload}）→ 用户可读文案
   - `hoursFromMinutes(minutes)` — 分钟 → 小时展示
+- `src/lib/validation.ts` — 表单输入校验小函数：
+  - `isValidDateString(s)` — 严格校验 YYYY-MM-DD 真实日历日期（回读比对挡 2026-02-30 类假日期）；CreationForm 截止日期用（原生 date 控件中文占位改不掉，故文本输入 + 自校验）
 
 ## 复用组件（src/components/）
 

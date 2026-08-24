@@ -35,17 +35,17 @@
         </div>
       </header>
 
-      <!-- 查看态正文：计划字段 + 任务列表 -->
+      <!-- 查看态正文：计划字段 + 任务列表。空字段整行隐藏、简述与名称相同也不重复显示 -->
       <div v-if="!editing" class="detail-body">
-        <div class="detail-fields">
-          <p class="field-view">
+        <div v-if="hasFields" class="detail-fields">
+          <p v-if="showSummary" class="field-view">
             <span class="field-name">简述</span>{{ plan.summary }}
           </p>
-          <p class="field-view">
-            <span class="field-name">详细内容</span><span class="detail-text">{{ plan.detail || "（未填写）" }}</span>
+          <p v-if="plan.detail" class="field-view">
+            <span class="field-name">详细内容</span><span class="detail-text">{{ plan.detail }}</span>
           </p>
-          <p class="field-view">
-            <span class="field-name">截止日期</span>{{ plan.due_date ?? "—" }}
+          <p v-if="plan.due_date" class="field-view">
+            <span class="field-name">截止日期</span>{{ plan.due_date }}
           </p>
         </div>
 
@@ -77,7 +77,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { PhArrowLeft, PhListChecks, PhPencilSimple } from "@phosphor-icons/vue";
 import { useRoute } from "vue-router";
 import CreationForm from "../components/CreationForm.vue";
@@ -90,6 +90,15 @@ const route = useRoute();
 const plan = ref<PlanView | null>(null);
 const loadError = ref("");
 const editing = ref(false);
+
+/** 简述与名称相同（留空回退的产物）或为空时不显示——避免两行一模一样 */
+const showSummary = computed(
+  () => plan.value != null && plan.value.summary !== "" && plan.value.summary !== plan.value.name,
+);
+/** 三个字段全空时整个字段框也不渲染 */
+const hasFields = computed(
+  () => showSummary.value || !!plan.value?.detail || !!plan.value?.due_date,
+);
 
 async function load() {
   loadError.value = "";
@@ -118,8 +127,11 @@ watch(() => route.params.id, load);
 </script>
 
 <style scoped>
+/* 内容列：限宽 + 居中（窗口拉大时空白均分两侧），窄窗口自动收缩 */
 .detail-page {
   max-width: 720px;
+  width: 100%;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 16px;

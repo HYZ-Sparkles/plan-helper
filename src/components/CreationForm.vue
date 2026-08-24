@@ -34,8 +34,14 @@
             </div>
             <span v-if="priorityLocked" class="hint lock-hint">计划开始后优先级不可调整</span>
           </FormField>
-          <FormField label="截止日期">
-            <input v-model="plan.dueDate" type="date" class="input" />
+          <FormField label="截止日期" :error="planErrors.dueDate">
+            <input
+              v-model="plan.dueDate"
+              class="input"
+              placeholder="选填 · 格式 2026-12-20"
+              @input="planErrors.dueDate = ''"
+              @blur="checkDueDate"
+            />
           </FormField>
         </div>
       </div>
@@ -48,7 +54,7 @@
           v-for="(task, i) in tasks"
           :key="task.id ?? `new-${i}`"
           class="task-card"
-          :class="{ expanded: !task.collapsed, dragging: dragFrom === i, locked: isLocked(task) }"
+          :class="{ expanded: !task.collapsed, dragging: dragFrom === i, locked: isLocked(task), 'drop-hint': dragOver === i && dragFrom !== i }"
         >
           <!-- 常驻摘要行：拖拽手柄 + 名称 + 耗时/子目标标记 + 删除；点行展开 -->
           <header
@@ -56,9 +62,9 @@
             :draggable="draggable(task)"
             @click="task.collapsed = !task.collapsed"
             @dragstart="onDragStart(i, $event)"
-            @dragover.prevent
+            @dragover.prevent="dragOver = i"
             @drop="onDrop(i)"
-            @dragend="dragFrom = -1"
+            @dragend="onDragEnd"
           >
             <PhDotsSixVertical v-if="draggable(task)" class="drag-handle" :size="16" />
             <span class="task-name" :class="{ unnamed: !task.name.trim() }">
@@ -189,6 +195,7 @@ import {
   type TaskStatus,
 } from "../lib/api";
 import { hoursFromMinutes, planErrorMessage, statusLabel } from "../lib/labels";
+import { isValidDateString } from "../lib/validation";
 
 /** 任务表单行（hours 是输入态字符串，提交时换算分钟；collapsed 是紧凑卡收起态） */
 interface TaskForm {
@@ -247,8 +254,8 @@ const tasks = reactive<TaskForm[]>(
   isEdit && props.plan ? props.plan.tasks.map(taskFormOf) : [{ ...blankTask() }],
 );
 
-/** 各段独立校验错误：计划段一条、每张任务卡一条（按段/卡显示，互不阻塞其它段） */
-const planErrors = reactive({ name: "" });
+/** 各段独立校验错误：计划段两条（名称/截止日期）、每张任务卡一条（按段/卡显示，互不阻塞其它段） */
+const planErrors = reactive({ name: "", dueDate: "" });
 const taskErrors = reactive<Record<number, { name?: string; hours?: string }>>({});
 const serverError = ref("");
 const saving = ref(false);
@@ -264,6 +271,8 @@ function draggable(task: TaskForm): boolean {
 
 /* ---- 拖拽排序（创建与编辑同一交互；HTML5 DnD，落点交换） ---- */
 const dragFrom = ref(-1);
+/** 当前悬停的目标卡（drop-hint 高亮）；-1 = 无 */
+const dragOver = ref(-1);
 
 function onDragStart(i: number, e: DragEvent) {
   dragFrom.value = i;
@@ -271,10 +280,14 @@ function onDragStart(i: number, e: DragEvent) {
 }
 function onDrop(i: number) {
   const from = dragFrom.value;
-  dragFrom.value = -1;
+  onDragEnd();
   if (from < 0 || from === i) return;
   const [moved] = tasks.splice(from, 1);
   tasks.splice(i, 0, moved);
+}
+function onDragEnd() {
+  dragFrom.value = -1;
+  dragOver.value = -1;
 }
 
 /* ---- 任务增删 ---- */
@@ -305,10 +318,18 @@ async function confirmDelete() {
   }
 }
 
+/** 失焦即时校验截止日期（原生 date 控件的占位文案改不掉，故用文本输入 + 自校验） */
+function checkDueDate() {
+  planErrors.dueDate = plan.dueDate.trim() && !isValidDateString(plan.dueDate.trim())
+    ? "日期格式不合法，应为 2026-12-20 这样的格式"
+    : "";
+}
+
 /** 保存前 UI 按段校验（领域层还有权威校验兜底）；出错的任务卡自动展开 */
 function validate(): boolean {
   planErrors.name = plan.name.trim() ? "" : "请填写计划名称";
-  let ok = !planErrors.name;
+  checkDueDate();
+  let ok = !planErrors.name && !planErrors.dueDate;
   for (const [i, t] of tasks.entries()) {
     const errs: { name?: string; hours?: string } = {};
     if (!t.name.trim()) errs.name = "请填写任务名称";
@@ -328,7 +349,7 @@ function buildDraft(): PlanDraft {
     summary: plan.summary,
     detail: plan.detail,
     priority: plan.priority,
-    due_date: plan.dueDate || null,
+    due_date: plan.dueDate.trim() || null,
     tasks: tasks.map((t) => ({
       id: t.id,
       name: t.name,
@@ -438,6 +459,11 @@ async function save() {
 .task-card.dragging {
   opacity: 0.5;
   box-shadow: inset 0 3px 0 var(--primary);
+}
+
+/* 拖拽悬停落点：目标卡边框亮主色，指示松手后插到的位置 */
+.task-card.drop-hint {
+  border-color: var(--primary);
 }
 
 /* 紧凑摘要行（常驻，矮行）：一行放下手柄/名称/标记/操作 */
