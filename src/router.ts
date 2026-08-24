@@ -8,6 +8,7 @@ import MainBoardWindow from "./windows/MainBoardWindow.vue";
 import MiniBoardWindow from "./windows/MiniBoardWindow.vue";
 import PetWindow from "./windows/PetWindow.vue";
 import CreatePage from "./pages/CreatePage.vue";
+import PlanDetailPage from "./pages/PlanDetailPage.vue";
 import PlansPage from "./pages/PlansPage.vue";
 import SettingsPage from "./pages/SettingsPage.vue";
 
@@ -24,6 +25,7 @@ export const router = createRouter({
       redirect: "/control-panel/plans",
       children: [
         { path: "plans", component: PlansPage },
+        { path: "plans/:id", component: PlanDetailPage },
         { path: "create", component: CreatePage },
         { path: "settings", component: SettingsPage },
       ],

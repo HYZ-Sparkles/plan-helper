@@ -30,6 +30,9 @@
   /* 阴影仅浮层 */
   --shadow-lg: 0 10px 25px rgba(0, 0, 0, 0.1), 0 4px 6px rgba(0, 0, 0, 0.05);
 
+  /* 弹窗遮罩（危险确认等模态浮层） */
+  --overlay-dim: rgba(28, 25, 23, 0.35); /* stone-800 35% */
+
   /* 圆角只用 8 / 12 / 16 */
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -112,6 +115,30 @@ body.transparent-root {
 }
 
 .primary-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 次级按钮（取消 / 占位禁用等，与主按钮成对出现） */
+.ghost-btn {
+  display: inline-block;
+  padding: 6px 14px;
+  border: var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.ghost-btn:hover:not(:disabled) {
+  border: var(--border-active);
+  color: var(--text-primary);
+}
+
+.ghost-btn:disabled {
+  color: var(--text-muted);
   opacity: 0.6;
   cursor: not-allowed;
 }

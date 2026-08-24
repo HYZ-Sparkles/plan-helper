@@ -35,6 +35,14 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
       return `${taskNo(payload.index ?? 0)}缺少预计耗时（无子目标任务必填）`;
     case "SubGoalsRequired":
       return `${taskNo(payload.index ?? 0)}勾选了子目标，但还没有录入子目标`;
+    case "PriorityLocked":
+      return "计划开始后优先级不可调整";
+    case "TaskLocked":
+      return `${taskNo(payload.index ?? 0)}已完成，字段锁定不可修改`;
+    case "TaskSetMismatch":
+      return "任务集与库中不一致——删除任务请用任务卡上的删除按钮";
+    case "NotFound":
+      return "目标计划或任务不存在";
     case "Storage":
       return `存储异常：${err.payload}`;
     default:

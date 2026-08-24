@@ -40,8 +40,9 @@ export type PlanStatus = "NotStarted" | "Active" | "Paused" | "Completed" | "Aba
 /** 任务状态 */
 export type TaskStatus = "NotStarted" | "Active" | "Completed";
 
-/** 创建任务入参（对应 domain::plans::NewTask） */
-export interface NewTask {
+/** 任务草稿（对应 domain::plans::TaskDraft；id 缺省 = 新任务） */
+export interface TaskDraft {
+  id?: number;
   name: string;
   summary?: string;
   detail?: string;
@@ -49,14 +50,14 @@ export interface NewTask {
   estimated_minutes?: number;
 }
 
-/** 创建计划入参（对应 domain::plans::NewPlan） */
-export interface NewPlan {
+/** 计划草稿（对应 domain::plans::PlanDraft）——创建与编辑共用（CreationUI 双模式） */
+export interface PlanDraft {
   name: string;
   summary?: string;
   detail?: string;
   priority: Priority;
   due_date?: string | null;
-  tasks: NewTask[];
+  tasks: TaskDraft[];
 }
 
 /** 任务视图（对应 domain::plans::TaskView） */
@@ -91,11 +92,26 @@ export interface PlanErrorShape {
 }
 
 /** 创建计划（含任务），返回新计划 id */
-export function createPlan(plan: NewPlan): Promise<number> {
+export function createPlan(plan: PlanDraft): Promise<number> {
   return invoke<number>("create_plan", { new: plan });
 }
 
 /** 计划列表（PlanOrdering 默认排序，含嵌套任务） */
 export function listPlans(): Promise<PlanView[]> {
   return invoke<PlanView[]>("list_plans");
+}
+
+/** 单个计划详情（含任务，按 position 排序） */
+export function getPlan(planId: number): Promise<PlanView> {
+  return invoke<PlanView>("get_plan", { planId });
+}
+
+/** 整计划编辑（CreationUI 编辑态保存） */
+export function updatePlan(planId: number, draft: PlanDraft): Promise<void> {
+  return invoke<void>("update_plan", { planId, draft });
+}
+
+/** 软删除任务进归档（确认弹窗在 UI，这里是权威删除通道） */
+export function deleteTask(taskId: number): Promise<void> {
+  return invoke<void>("delete_task", { taskId });
 }

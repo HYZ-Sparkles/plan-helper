@@ -1,22 +1,22 @@
 <template>
   <!--
-    计划管理（工单 02：4-tab 壳 + 数量徽章）。
-    「进行中」tab 承载工作区：未开始 + 进行中（未开始计划从这里点「开始」，按钮在工单 05 接线）。
+    计划管理（工单 03：状态筛选栏 + 单列表，2026-08-23 grill 修订，取代 4-tab）。
+    筛选项六项各带数量，默认「全部」；点击卡片进入计划详情页。
   -->
   <section>
     <h2 class="page-title">计划管理</h2>
 
-    <div class="tabs">
+    <div class="filter-bar">
       <button
-        v-for="tab in tabs"
-        :key="tab.key"
+        v-for="f in filters"
+        :key="f.key"
         type="button"
-        class="tab"
-        :class="{ active: activeTab === tab.key }"
-        @click="activeTab = tab.key"
+        class="filter"
+        :class="{ active: activeFilter === f.key }"
+        @click="activeFilter = f.key"
       >
-        {{ tab.title }}
-        <span class="count">{{ countOf(tab) }}</span>
+        {{ f.label }}
+        <span class="count">{{ countOf(f) }}</span>
       </button>
     </div>
 
@@ -28,11 +28,12 @@
     </div>
 
     <div v-else class="plan-list">
-      <article
+      <RouterLink
         v-for="p in shownPlans"
         :key="p.id"
         class="plan-card"
         :class="`edge-${p.priority}`"
+        :to="`/control-panel/plans/${p.id}`"
       >
         <div class="plan-main">
           <div class="plan-title-row">
@@ -46,7 +47,7 @@
             <template v-if="p.due_date"> · 截止 {{ p.due_date }}</template>
           </p>
         </div>
-      </article>
+      </RouterLink>
       <p v-if="shownPlans.length === 0" class="hint">此分类暂无计划</p>
     </div>
   </section>
@@ -57,17 +58,17 @@ import { computed, onMounted, ref } from "vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import { listPlans, type PlanStatus, type PlanView } from "../lib/api";
-import { hoursFromMinutes } from "../lib/labels";
+import { hoursFromMinutes, statusLabel } from "../lib/labels";
 
-/** tab 定义：key + 标题 + 收纳的状态集合（进行中 tab 含未开始 = 可推进工作区） */
-const tabs = [
-  { key: "active", title: "进行中", statuses: ["NotStarted", "Active"] as PlanStatus[] },
-  { key: "paused", title: "已暂停", statuses: ["Paused"] as PlanStatus[] },
-  { key: "completed", title: "已完成", statuses: ["Completed"] as PlanStatus[] },
-  { key: "abandoned", title: "已放弃", statuses: ["Abandoned"] as PlanStatus[] },
+/** 筛选项：key + 文案 + 命中状态集（「全部」不过滤）；五个状态都是一等公民 */
+const filters: { key: string; label: string; statuses: PlanStatus[] | null }[] = [
+  { key: "all", label: "全部", statuses: null },
+  ...(["NotStarted", "Active", "Paused", "Completed", "Abandoned"] as PlanStatus[]).map(
+    (s) => ({ key: s, label: statusLabel[s], statuses: [s] }),
+  ),
 ];
 
-const activeTab = ref("active");
+const activeFilter = ref("all");
 const plans = ref<PlanView[]>([]);
 const loadError = ref("");
 
@@ -79,13 +80,19 @@ onMounted(async () => {
   }
 });
 
+/** 筛选项是否命中某计划（「全部」statuses 为 null 不过滤）；列表与数量统计共用 */
+function matches(f: (typeof filters)[number], p: PlanView): boolean {
+  return f.statuses == null || f.statuses.includes(p.status);
+}
+
+/** 当前筛选下的列表（列表本身仍按 PlanOrdering 排序，不做重排） */
 const shownPlans = computed(() => {
-  const tab = tabs.find((t) => t.key === activeTab.value)!;
-  return plans.value.filter((p) => tab.statuses.includes(p.status));
+  const f = filters.find((x) => x.key === activeFilter.value)!;
+  return plans.value.filter((p) => matches(f, p));
 });
 
-function countOf(tab: (typeof tabs)[number]) {
-  return plans.value.filter((p) => tab.statuses.includes(p.status)).length;
+function countOf(f: (typeof filters)[number]) {
+  return plans.value.filter((p) => matches(f, p)).length;
 }
 
 /** 任务预计耗时合计（小时） */
@@ -95,29 +102,31 @@ function totalHours(p: PlanView) {
 </script>
 
 <style scoped>
-.tabs {
+.filter-bar {
   display: flex;
-  gap: 4px;
-  border-bottom: var(--border-default);
+  flex-wrap: wrap;
+  gap: 6px;
   margin-bottom: 16px;
 }
 
-.tab {
+.filter {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 14px;
-  border: none;
-  border-bottom: 2px solid transparent;
-  background: transparent;
+  padding: 5px 12px;
+  border: var(--border-default);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   font: inherit;
+  font-size: 13px;
   color: var(--text-secondary);
   cursor: pointer;
 }
 
-.tab.active {
-  color: var(--primary);
-  border-bottom-color: var(--primary);
+.filter.active {
+  border-color: var(--primary);
+  background: var(--bg-accent-group);
+  color: var(--text-primary);
 }
 
 .count {
@@ -132,8 +141,8 @@ function totalHours(p: PlanView) {
   color: var(--text-muted);
 }
 
-.tab.active .count {
-  background: var(--bg-accent-group);
+.filter.active .count {
+  background: var(--surface);
   border-color: var(--primary);
   color: var(--text-primary);
 }
@@ -166,6 +175,13 @@ function totalHours(p: PlanView) {
   border-radius: var(--radius-md);
   background: var(--surface);
   overflow: hidden;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color 0.15s;
+}
+
+.plan-card:hover {
+  border-color: var(--primary);
 }
 
 /* PriorityVisuals：列表项左侧 4px 优先级边条 */
