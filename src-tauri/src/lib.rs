@@ -35,8 +35,7 @@ pub fn run() {
                 db: Mutex::new(conn),
                 clock: Box::new(SystemClock),
             });
-            position_pet(app)?;
-            position_mini_board(app)?;
+            position_pet_and_board(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -65,36 +64,28 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// 把桌宠摆到主显示器工作区右下角（后续拖拽/记忆位置由桌宠工单接管）。
-fn position_pet(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let pet = app.get_webview_window("pet");
+/// 把「桌宠 + 小看板」组合体锚到主显示器工作区右下角：小看板在下方、右对齐 40px
+/// 边距，桌宠居其正上方（水平居中、12px 间距），两者一起完整落在屏幕内
+/// （2026-08-24 验收要求：小看板在桌宠下方且不出屏）。拖拽跟随/记忆位置由工单 09
+/// 接管，模式显隐由工单 08 接管。
+fn position_pet_and_board(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    let (pet, mini) = (app.get_webview_window("pet"), app.get_webview_window("mini-board"));
     let monitor = pet
         .as_ref()
         .and_then(|w| w.current_monitor().ok().flatten())
         .or_else(|| app.primary_monitor().ok().flatten());
-    if let (Some(pet), Some(monitor)) = (pet, monitor) {
+    if let (Some(pet), Some(mini), Some(monitor)) = (pet, mini, monitor) {
         let area = monitor.work_area();
         let margin = 40;
-        let size = pet.outer_size()?;
-        let pos = tauri::PhysicalPosition::new(
-            area.position.x + area.size.width as i32 - size.width as i32 - margin,
-            area.position.y + area.size.height as i32 - size.height as i32 - margin,
-        );
-        pet.set_position(pos)?;
-    }
-    Ok(())
-}
-
-/// 小看板摆在桌宠正上方（共享坐标系的初始位；拖拽跟随由工单 09 接管，
-/// 模式显隐由工单 08 接管）。上下留 12px 间距，点击互不遮挡。
-fn position_mini_board(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let (pet, mini) = (app.get_webview_window("pet"), app.get_webview_window("mini-board"));
-    if let (Some(pet), Some(mini)) = (pet, mini) {
-        let pet_pos = pet.outer_position()?;
-        let size = mini.outer_size()?;
-        mini.set_position(tauri::PhysicalPosition::new(
-            pet_pos.x,
-            pet_pos.y - size.height as i32 - 12,
+        let gap = 12;
+        let pet_size = pet.outer_size()?;
+        let mini_size = mini.outer_size()?;
+        let mini_x = area.position.x + area.size.width as i32 - mini_size.width as i32 - margin;
+        let mini_y = area.position.y + area.size.height as i32 - mini_size.height as i32 - margin;
+        mini.set_position(tauri::PhysicalPosition::new(mini_x, mini_y))?;
+        pet.set_position(tauri::PhysicalPosition::new(
+            mini_x + (mini_size.width as i32 - pet_size.width as i32) / 2,
+            mini_y - gap - pet_size.height as i32,
         ))?;
     }
     Ok(())
