@@ -199,20 +199,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMouseDown))
   padding-right: 6px;
 }
 
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.icon-btn:hover,
+/* 图标按钮形态走 tokens.css 全局 .icon-btn；这里只补日历弹层开关的激活态 */
 .icon-btn.active {
   color: var(--primary);
   background: var(--bg-accent-group);
@@ -297,16 +284,5 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocMouseDown))
   border-top: var(--border-default);
 }
 
-.link-btn {
-  border: none;
-  background: transparent;
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.link-btn:hover {
-  color: var(--primary);
-}
+/* 文字链接按钮走 tokens.css 全局 .link-btn */
 </style>

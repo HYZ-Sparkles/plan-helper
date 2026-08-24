@@ -6,15 +6,16 @@
 
 - `src/lib/api.ts` — 后端 command 的类型化封装。**组件一律通过这里的包装函数调用后端，不直接 `invoke`**。
   - 类型：`Settings`、`TimeWindow`、`AppStateView`（与 Rust serde 结构一一对应，改后端要同步改这里）
-  - 计划域类型：`Priority` / `PlanStatus` / `TaskStatus` 枚举、`PlanDraft` / `TaskDraft`（创建与编辑共用入参，TaskDraft.id 缺省 = 新任务；`subgoals` 子目标行、`depends_on` 前置任务的草稿下标引用）、`SubGoalDraft`、`PlanView` / `TaskView`（含 `subgoals` / `prerequisite_ids`）/ `SubGoalView`、`PlanErrorShape`
+  - 计划域类型：`Priority` / `PlanStatus` / `TaskStatus` / `PauseReason` 枚举、`PlanDraft` / `TaskDraft`（创建与编辑共用入参，TaskDraft.id 缺省 = 新任务；`subgoals` 子目标行、`depends_on` 前置任务的草稿下标引用）、`SubGoalDraft`、`PlanView`（含 `subgoals` / `prerequisite_ids` / `pause_reason`）/ `TaskView`（含 `subgoals` / `prerequisite_ids`）/ `SubGoalView`、`PlanErrorShape`
   - `getAppState(): Promise<AppStateView>` — 启动快照（设置 + 服务端时间）
   - `createPlan(draft: PlanDraft): Promise<number>` — 创建计划（含任务/子目标/依赖），失败 reject 结构化错误
-  - `listPlans(): Promise<PlanView[]>` — 计划列表（PlanOrdering 排序，含嵌套任务）
+  - `listPlans(): Promise<PlanView[]>` — 计划列表（PlanOrdering：手动序优先于默认排序，含嵌套任务）
   - `getPlan(planId: number): Promise<PlanView>` — 单个计划详情（工单 03）
   - `updatePlan(planId, draft): Promise<void>` — 整计划编辑保存（编辑态）
   - `deleteTask(taskId): Promise<void>` — 软删除任务进归档（服务端连带解除依赖边；确认弹窗在 UI）
+  - 生命周期（工单 05，状态机在服务层、UI 只按状态展示可得操作）：`startPlan` / `pausePlan` / `resumePlan` / `completePlan` / `abortPlan`（二级确认在 UI）、`copyPlanAsNew(planId): Promise<number>`（返回新计划 id）、`setPlanOrder(orderedIds)`（传全部计划的完整顺序）
 - `src/lib/labels.ts` — 领域枚举的中文文案集中地：
-  - `priorityLabel` / `statusLabel`（计划与任务状态合一张表，共有值标签一致）映射表
+  - `priorityLabel` / `statusLabel`（计划与任务状态合一张表，共有值标签一致）/ `pauseReasonLabel`（用户主动 / 自动抢占）映射表
   - `planErrorMessage(err)` — 后端 PlanError（{kind,payload}）→ 用户可读文案
   - `hoursFromMinutes(minutes)` — 分钟 → 小时展示
 - `src/lib/progress.ts` — 前端进度派生（ADR-0002，与服务层 `task_progress` 同公式）：
@@ -40,8 +41,13 @@
 
 - `.hint` / `.page-title` — 次级提示文字 / 页标题。
 - `.input` — 单行输入与 textarea 的统一形态（边框/圆角/focus）。
-- `.primary-btn` — 主操作按钮（带文字的主按钮，IconFont 例外项）。
-- `.ghost-btn` — 次级按钮（取消 / 禁用占位），含 `:disabled` 形态；与主按钮成对出现。
+- **按钮体系（工单 05 归一，全应用唯一形态来源）**：`.primary-btn` 主操作、`.ghost-btn` 次级（取消/暂停，与主按钮严格等高 39px）、`.danger-btn` 危险主操作（打字确认弹窗的执行按钮）、`.danger-ghost-btn` 危险次操作（放弃等破坏性入口，hover 红底）、`.icon-btn` 图标按钮（删除类加 `danger` 变体，hover 红）、`.link-btn` 文字链接型轻操作；全部带 `:focus-visible` 键盘聚焦环，原生 `button` 也有兜底聚焦（覆盖 filter/add-task 等特型入口——特型按钮样式可 scoped 自定，但不再自造文字/图标按钮形态）。
+- **弹窗骨架**：`.dialog-overlay` / `.dialog` / `.dialog-title` / `.dialog-body` / `.dialog-actions` — ConfirmDialog 与 TypeConfirmDialog 共用（组件只留自己的内容样式）。
+
+## 页面级实现要点（不易从文件名看出）
+
+- `PlanDetailPage.vue` — 生命周期按钮矩阵（未开始→开始；进行中→完成计划〔任务全完成后亮起〕/暂停/放弃；已暂停→继续/放弃；终态→复制并新建）；放弃走一级确认（保留多少历史）+ 二级打字「再删」；`runLifecycle` 统一 busy 互斥与错误文案。
+- `PlansPage.vue` — 计划列表指针拖拽排序（半透明 + 3px 主色条、±20px 磁吸、他卡让位）；过滤视图内拖拽由 `persistMove` 并回全量顺序再 `setPlanOrder` 持久化。
 
 ## 路由与多窗口
 

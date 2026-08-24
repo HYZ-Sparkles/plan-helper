@@ -1,7 +1,7 @@
 /**
  * 领域枚举的中文显示与错误文案：UI 展示统一从这取，不散落组件。
  */
-import type { PlanStatus, Priority, TaskStatus } from "./api";
+import type { PauseReason, PlanStatus, Priority, TaskStatus } from "./api";
 
 /** 优先级文字标签（CONTEXT PriorityVisuals：文字标签 + 图标，图标在 PriorityLabel 组件） */
 export const priorityLabel: Record<Priority, string> = {
@@ -17,6 +17,12 @@ export const statusLabel: Record<PlanStatus | TaskStatus, string> = {
   Paused: "已暂停",
   Completed: "已完成",
   Abandoned: "已放弃",
+};
+
+/** 暂停原因中文（CONTEXT PauseReason 二值） */
+export const pauseReasonLabel: Record<PauseReason, string> = {
+  UserInitiated: "用户主动",
+  AutoPreempted: "自动抢占",
 };
 
 /**
@@ -53,6 +59,12 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
         : `${taskNo(payload.task_index)}的前置任务形成循环依赖`;
     case "PriorityLocked":
       return "计划开始后优先级不可调整";
+    case "PlanStatusInvalid":
+      return "当前计划状态不允许此操作";
+    case "PlanNotTerminal":
+      return "只有已完成或已放弃的计划可以复制并新建";
+    case "TasksNotCompleted":
+      return "还有未完成的任务——全部完成后才能确认完成计划";
     case "TaskLocked":
       return `${taskNo(payload.index ?? 0)}已完成，字段锁定不可修改`;
     case "TaskSetMismatch":

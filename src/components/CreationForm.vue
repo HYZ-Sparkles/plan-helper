@@ -73,7 +73,7 @@
             </span>
             <button
               type="button"
-              class="icon-btn"
+              class="icon-btn danger"
               title="删除任务"
               @click.stop="removeTask(i)"
             >
@@ -163,7 +163,7 @@
                 <button
                   v-if="!s.completed"
                   type="button"
-                  class="icon-btn"
+                  class="icon-btn danger"
                   title="删除这行子目标"
                   @click="removeSubgoal(i, j)"
                 >
@@ -774,19 +774,7 @@ async function save() {
   white-space: nowrap;
 }
 
-.icon-btn {
-  display: inline-flex;
-  padding: 4px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.icon-btn:hover {
-  color: var(--color-danger);
-}
+/* 图标按钮形态走 tokens.css 全局 .icon-btn（删除类带 danger 变体） */
 
 .chevron {
   color: var(--text-muted);

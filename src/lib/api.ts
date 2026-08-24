@@ -95,6 +95,9 @@ export interface TaskView {
   prerequisite_ids: number[];
 }
 
+/** 暂停原因（CONTEXT PauseReason 二值；AutoPreempted 由工单 12 抢占写入） */
+export type PauseReason = "UserInitiated" | "AutoPreempted";
+
 /** 计划视图（对应 domain::plans::PlanView，含嵌套任务） */
 export interface PlanView {
   id: number;
@@ -104,6 +107,7 @@ export interface PlanView {
   priority: Priority;
   due_date: string | null;
   status: PlanStatus;
+  pause_reason: PauseReason | null;
   created_at: string;
   tasks: TaskView[];
 }
@@ -137,4 +141,41 @@ export function updatePlan(planId: number, draft: PlanDraft): Promise<void> {
 /** 软删除任务进归档（确认弹窗在 UI，这里是权威删除通道） */
 export function deleteTask(taskId: number): Promise<void> {
   return invoke<void>("delete_task", { taskId });
+}
+
+/* ---- 计划生命周期（工单 05）：状态机在服务层，UI 只按状态展示可得操作 ---- */
+
+/** 未开始 → 进行中 */
+export function startPlan(planId: number): Promise<void> {
+  return invoke<void>("start_plan", { planId });
+}
+
+/** 进行中 → 已暂停（手动，原因记"用户主动"） */
+export function pausePlan(planId: number): Promise<void> {
+  return invoke<void>("pause_plan", { planId });
+}
+
+/** 已暂停 → 进行中 */
+export function resumePlan(planId: number): Promise<void> {
+  return invoke<void>("resume_plan", { planId });
+}
+
+/** 进行中 → 已完成（手动确认；服务层校验全部任务已完成） */
+export function completePlan(planId: number): Promise<void> {
+  return invoke<void>("complete_plan", { planId });
+}
+
+/** 进行中/已暂停 → 已放弃（二级确认在 UI） */
+export function abortPlan(planId: number): Promise<void> {
+  return invoke<void>("abort_plan", { planId });
+}
+
+/** 终态计划复制并新建（进度归零、"- 副本"、直接进行中），返回新计划 id */
+export function copyPlanAsNew(planId: number): Promise<number> {
+  return invoke<number>("copy_plan_as_new", { planId });
+}
+
+/** 计划列表手动排序持久化（传全部计划的完整顺序） */
+export function setPlanOrder(orderedIds: number[]): Promise<void> {
+  return invoke<void>("set_plan_order", { orderedIds });
 }

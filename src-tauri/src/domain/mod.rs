@@ -3,5 +3,6 @@
 
 pub mod app_state;
 pub mod deps;
+pub mod lifecycle;
 pub mod plans;
 pub mod settings;

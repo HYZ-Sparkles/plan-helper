@@ -34,7 +34,14 @@ pub fn run() {
             commands::list_plans,
             commands::get_plan,
             commands::update_plan,
-            commands::delete_task
+            commands::delete_task,
+            commands::start_plan,
+            commands::pause_plan,
+            commands::resume_plan,
+            commands::complete_plan,
+            commands::abort_plan,
+            commands::copy_plan_as_new,
+            commands::set_plan_order
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

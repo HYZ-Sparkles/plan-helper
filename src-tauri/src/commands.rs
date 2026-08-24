@@ -5,6 +5,7 @@ use tauri::State;
 
 use crate::app_state::AppState;
 use crate::domain::app_state::{app_state_view, AppStateView};
+use crate::domain::lifecycle::LifecycleService;
 use crate::domain::plans::{PlanDraft, PlanError, PlanService, PlanView};
 
 /// 示例接缝命令：UI → command → 领域服务 → 返回。
@@ -54,4 +55,55 @@ pub fn update_plan(
 pub fn delete_task(state: State<'_, AppState>, task_id: i64) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     PlanService::delete_task(&conn, state.clock.as_ref(), task_id)
+}
+
+/* ---- 计划生命周期（工单 05）：薄代理，状态机在 domain::lifecycle ---- */
+
+/// 未开始 → 进行中。
+#[tauri::command]
+pub fn start_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    LifecycleService::start(&conn, plan_id)
+}
+
+/// 进行中 → 已暂停（手动，原因记"用户主动"）。
+#[tauri::command]
+pub fn pause_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    LifecycleService::pause(&conn, plan_id)
+}
+
+/// 已暂停 → 进行中。
+#[tauri::command]
+pub fn resume_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    LifecycleService::resume(&conn, plan_id)
+}
+
+/// 进行中 → 已完成（手动确认；全部任务已完成为前置，服务层校验）。
+#[tauri::command]
+pub fn complete_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    LifecycleService::complete(&conn, plan_id)
+}
+
+/// 进行中/已暂停 → 已放弃（二级确认在 UI）。
+#[tauri::command]
+pub fn abort_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    LifecycleService::abort(&conn, plan_id)
+}
+
+/// 终态计划复制并新建（进度归零、名称加"- 副本"、直接进行中），返回新计划 id。
+#[tauri::command]
+pub fn copy_plan_as_new(state: State<'_, AppState>, plan_id: i64) -> Result<i64, PlanError> {
+    let conn = state.db.lock().unwrap();
+    LifecycleService::copy_as_new(&conn, state.clock.as_ref(), plan_id)
+}
+
+/// 计划列表手动排序持久化（完整顺序）。
+#[tauri::command]
+pub fn set_plan_order(state: State<'_, AppState>, ordered_ids: Vec<i64>) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    PlanService::set_order(&conn, &ordered_ids)
 }

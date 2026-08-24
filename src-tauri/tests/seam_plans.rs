@@ -1,38 +1,20 @@
 //! 计划领域接缝测试：创建校验规则、持久化、PlanOrdering 默认排序、整计划编辑不变量、
 //! 软删除归档、重开数据库不丢（工单 02/03）。
 
-use chrono::{Local, TimeZone};
 
-use plan_helper_lib::clock::FixedClock;
 use plan_helper_lib::domain::plans::{
-    PlanDraft, PlanError, PlanService, PlanStatus, Priority, SubGoalDraft, TaskDraft, TaskStatus,
+    PlanDraft, PlanError, PlanService, PlanStatus, Priority, TaskStatus,
 };
 use plan_helper_lib::infra::db;
 
-/// 固定时钟（本地时区）
-fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> FixedClock {
-    FixedClock(Local.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap())
-}
-
-/// 任务草稿快捷构造（无 id = 新任务；无子目标、无依赖）
-fn task(name: &str, minutes: u32) -> TaskDraft {
-    TaskDraft {
-        id: None,
-        name: name.into(),
-        summary: String::new(),
-        detail: String::new(),
-        has_subgoals: false,
-        estimated_minutes: Some(minutes),
-        subgoals: Vec::new(),
-        depends_on: Vec::new(),
-    }
-}
+mod common;
+use common::{at, draft_of, force_plan_status, force_task_status, plain_task};
 
 /// 两任务的无子目标计划样例（第二个任务简述留空、未填详细内容）
 fn sample_plan() -> PlanDraft {
-    let mut a = task("背完所有 6 级词汇", 6000);
+    let mut a = plain_task("背完所有 6 级词汇", 6000);
     a.summary = "词汇书两轮".into();
-    let mut b = task("完成英语真题", 1200);
+    let mut b = plain_task("完成英语真题", 1200);
     b.summary = String::new();
     PlanDraft {
         name: "备考英语 6 级".into(),
@@ -44,50 +26,7 @@ fn sample_plan() -> PlanDraft {
     }
 }
 
-/// 从库中视图构造编辑草稿（UI 编辑态装载的镜像：任务带 id）
-fn draft_of(p: &plan_helper_lib::domain::plans::PlanView) -> PlanDraft {
-    PlanDraft {
-        name: p.name.clone(),
-        summary: p.summary.clone(),
-        detail: p.detail.clone(),
-        priority: p.priority,
-        due_date: p.due_date.clone(),
-        tasks: p
-            .tasks
-            .iter()
-            .map(|t| TaskDraft {
-                id: Some(t.id),
-                name: t.name.clone(),
-                summary: t.summary.clone(),
-                detail: t.detail.clone(),
-                has_subgoals: t.has_subgoals,
-                estimated_minutes: t.estimated_minutes,
-                subgoals: t
-                    .subgoals
-                    .iter()
-                    .map(|s| SubGoalDraft {
-                        id: Some(s.id),
-                        name: s.name.clone(),
-                        estimated_minutes: s.estimated_minutes,
-                    })
-                    .collect(),
-                depends_on: Vec::new(),
-            })
-            .collect(),
-    }
-}
-
-/// 直接落库任务状态（汇报路径工单 07 才接通；测试用 SQL 制造已完成任务这一前置状态）
-fn force_task_status(conn: &rusqlite::Connection, task_id: i64, status: TaskStatus) {
-    conn.execute("UPDATE tasks SET status = ?1 WHERE id = ?2", rusqlite::params![status.as_db(), task_id])
-        .unwrap();
-}
-
-/// 直接落库计划状态（状态机转换工单 05 才接通；测试用 SQL 制造"已开始"这一前置状态）
-fn force_plan_status(conn: &rusqlite::Connection, plan_id: i64, status: PlanStatus) {
-    conn.execute("UPDATE plans SET status = ?1 WHERE id = ?2", rusqlite::params![status.as_db(), plan_id])
-        .unwrap();
-}
+/// 从库中视图构造编辑草稿——见 common::draft_of（三套 seam 测试共用）
 
 #[test]
 fn create_persists_no_subgoal_plan() {
@@ -173,7 +112,7 @@ fn list_orders_priority_desc_then_created_desc() {
         detail: String::new(),
         priority,
         due_date: None,
-        tasks: vec![task("t", 60)],
+        tasks: vec![plain_task("t", 60)],
     };
     PlanService::create(&conn, &at(2026, 8, 20, 9, 0), &base("H", Priority::High)).unwrap();
     PlanService::create(&conn, &at(2026, 8, 21, 9, 0), &base("L", Priority::Low)).unwrap();
@@ -324,7 +263,7 @@ fn update_reorders_unfinished_and_sinks_completed() {
         detail: String::new(),
         priority: Priority::Medium,
         due_date: None,
-        tasks: vec![task("A", 60), task("B", 60), task("C", 60)],
+        tasks: vec![plain_task("A", 60), plain_task("B", 60), plain_task("C", 60)],
     };
     let id = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &base()).unwrap();
     let loaded = PlanService::get(&conn, id).unwrap();
@@ -354,7 +293,7 @@ fn update_appends_new_task_after_unfinished() {
         detail: String::new(),
         priority: Priority::Medium,
         due_date: None,
-        tasks: vec![task("A", 60), task("B", 60)],
+        tasks: vec![plain_task("A", 60), plain_task("B", 60)],
     };
     let id = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &base()).unwrap();
     force_plan_status(&conn, id, PlanStatus::Active);
@@ -362,7 +301,7 @@ fn update_appends_new_task_after_unfinished() {
     force_task_status(&conn, loaded.tasks[1].id, TaskStatus::Completed);
 
     let mut draft = draft_of(&PlanService::get(&conn, id).unwrap());
-    draft.tasks.push(task("N", 90));
+    draft.tasks.push(plain_task("N", 90));
     PlanService::update(&conn, &at(2026, 8, 24, 9, 0), id, &draft).unwrap();
 
     let p = PlanService::get(&conn, id).unwrap();

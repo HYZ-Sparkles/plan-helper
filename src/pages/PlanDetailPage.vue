@@ -1,8 +1,9 @@
 <template>
   <!--
-    计划详情页（工单 03；CONTEXT「计划详情」）：头部 = 计划字段 + 优先级标签 + 状态徽章
-    + 生命周期按钮占位（工单 05 接线）+「编辑」；正文 = 任务列表。
-    点「编辑」正文切换为 CreationUI 编辑态（与创建页共用 CreationForm 双模式）。
+    计划详情页（工单 03/05；CONTEXT「计划详情」）：头部 = 计划字段 + 优先级标签 + 状态徽章
+    + 生命周期操作（按状态显示可得操作，工单 05 接线）+「编辑」；正文 = 任务列表。
+    点「编辑」正文切换为 CreationUI 编辑态（与创建页共用 CreationForm 双模式）；
+    生命周期按钮不进编辑态（spec 56a）。
   -->
   <section class="detail-page">
     <RouterLink class="back" to="/control-panel/plans">
@@ -16,24 +17,93 @@
 
     <template v-else-if="plan">
       <header class="detail-header">
-        <div class="title-row">
-          <h2 class="page-title">{{ plan.name }}</h2>
-          <PriorityLabel :priority="plan.priority" />
-          <StatusBadge :status="plan.status" />
+        <div class="title-col">
+          <div class="title-row">
+            <h2 class="page-title">{{ plan.name }}</h2>
+            <PriorityLabel :priority="plan.priority" />
+            <StatusBadge :status="plan.status" />
+          </div>
+          <!-- 暂停原因（CONTEXT PauseReason）：已暂停时透出，说明是谁按下了暂停 -->
+          <p v-if="plan.status === 'Paused' && plan.pause_reason" class="hint pause-reason">
+            暂停原因：{{ pauseReasonLabel[plan.pause_reason] }}
+          </p>
         </div>
         <div class="header-actions">
-          <!-- 生命周期操作占位：按状态显示哪些按钮、状态机接线都在工单 05；编辑态不进生命周期按钮（spec 56a） -->
-          <div v-if="!editing" class="lifecycle" title="生命周期操作即将到来（工单 05 接线）">
-            <button type="button" class="ghost-btn" disabled>开始</button>
-            <button type="button" class="ghost-btn" disabled>暂停</button>
-            <button type="button" class="ghost-btn" disabled>放弃</button>
-            <button type="button" class="ghost-btn" disabled>复制并新建</button>
+          <!-- 生命周期操作矩阵（ADR-0001）：
+               未开始 → 开始；进行中 → 完成计划(任务全完成后亮起)/暂停/放弃；
+               已暂停 → 继续/放弃；终态 → 复制并新建（唯一重启路径，无"重新开始"） -->
+          <div v-if="!editing" class="lifecycle">
+            <button
+              v-if="plan.status === 'NotStarted'"
+              type="button"
+              class="primary-btn"
+              :disabled="busy"
+              @click="runLifecycle(() => startPlan(plan!.id))"
+            >
+              <PhPlay :size="16" /> 开始
+            </button>
+            <template v-else-if="plan.status === 'Active'">
+              <button
+                v-if="allTasksDone"
+                type="button"
+                class="primary-btn"
+                :disabled="busy"
+                @click="pendingComplete = true"
+              >
+                <PhCheckCircle :size="16" /> 完成计划
+              </button>
+              <button
+                type="button"
+                class="ghost-btn"
+                :disabled="busy"
+                @click="runLifecycle(() => pausePlan(plan!.id))"
+              >
+                <PhPause :size="16" /> 暂停
+              </button>
+              <button
+                type="button"
+                class="danger-ghost-btn"
+                :disabled="busy"
+                @click="abortStage = 'info'"
+              >
+                <PhXCircle :size="16" /> 放弃
+              </button>
+            </template>
+            <template v-else-if="plan.status === 'Paused'">
+              <button
+                type="button"
+                class="primary-btn"
+                :disabled="busy"
+                @click="runLifecycle(() => resumePlan(plan!.id))"
+              >
+                <PhPlay :size="16" /> 继续
+              </button>
+              <button
+                type="button"
+                class="danger-ghost-btn"
+                :disabled="busy"
+                @click="abortStage = 'info'"
+              >
+                <PhXCircle :size="16" /> 放弃
+              </button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="primary-btn"
+              :disabled="busy"
+              @click="runLifecycle(copyAsNew)"
+            >
+              <PhCopySimple :size="16" /> 复制并新建
+            </button>
           </div>
-          <button v-if="!editing" type="button" class="primary-btn" @click="editing = true">
+          <button v-if="!editing" type="button" class="ghost-btn" :disabled="busy" @click="editing = true">
             <PhPencilSimple :size="16" /> 编辑
           </button>
         </div>
       </header>
+
+      <p v-if="serverError" class="server-error">{{ serverError }}</p>
 
       <!-- 查看态正文：计划字段 + 任务列表。空字段整行隐藏、简述与名称相同也不重复显示 -->
       <div v-if="!editing" class="detail-body">
@@ -91,6 +161,41 @@
         @cancel="onCancel"
       />
     </template>
+
+    <!-- 完成计划确认（PlanCompletionConfirm：手动确认"我做到了"） -->
+    <ConfirmDialog
+      v-if="pendingComplete"
+      title="完成这个计划？"
+      action-label="完成计划"
+      @confirm="runLifecycle(() => completePlan(plan!.id), { closeComplete: true })"
+      @cancel="pendingComplete = false"
+    >
+      <p>{{ plan!.tasks.length }} 个任务已全部完成。确认后计划进入「已完成」终态。</p>
+      <p>完成后不可重启；如需再来一轮，用「复制并新建」。</p>
+    </ConfirmDialog>
+
+    <!-- 放弃一级确认（CONTEXT AbortPlan：先说清保留什么历史，再进打字确认） -->
+    <ConfirmDialog
+      v-if="abortStage === 'info'"
+      title="放弃这个计划？"
+      action-label="继续"
+      @confirm="abortStage = 'type'"
+      @cancel="abortStage = null"
+    >
+      <p>将保留 {{ plan!.tasks.length }} 个任务 / {{ progressedHours }} 小时进度作为历史，随时可回看。</p>
+      <p>放弃是终态，不可重启。</p>
+    </ConfirmDialog>
+
+    <!-- 放弃二级确认：打字「再删」（防误操作，措辞沿用任务删除） -->
+    <TypeConfirmDialog
+      v-if="abortStage === 'type'"
+      title="确认放弃计划"
+      action-label="放弃计划"
+      @confirm="runLifecycle(() => abortPlan(plan!.id), { closeAbort: true })"
+      @cancel="abortStage = null"
+    >
+      <p>输入「再删」后，计划「{{ plan!.name }}」将进入「已放弃」终态。</p>
+    </TypeConfirmDialog>
   </section>
 </template>
 
@@ -100,21 +205,61 @@ import {
   PhArrowLeft,
   PhCheckCircle,
   PhCircle,
+  PhCopySimple,
   PhListChecks,
+  PhPause,
   PhPencilSimple,
+  PhPlay,
+  PhXCircle,
 } from "@phosphor-icons/vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import ConfirmDialog from "../components/ConfirmDialog.vue";
 import CreationForm from "../components/CreationForm.vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
-import { getPlan, type PlanView, type TaskView } from "../lib/api";
-import { hoursFromMinutes, planErrorMessage } from "../lib/labels";
-import { taskProgressLabel } from "../lib/progress";
+import TypeConfirmDialog from "../components/TypeConfirmDialog.vue";
+import {
+  abortPlan,
+  completePlan,
+  copyPlanAsNew,
+  getPlan,
+  pausePlan,
+  resumePlan,
+  startPlan,
+  type PlanView,
+  type TaskView,
+} from "../lib/api";
+import { hoursFromMinutes, pauseReasonLabel, planErrorMessage } from "../lib/labels";
+import { taskProgress, taskProgressLabel } from "../lib/progress";
 
 const route = useRoute();
+const router = useRouter();
 const plan = ref<PlanView | null>(null);
 const loadError = ref("");
 const editing = ref(false);
+
+/** 生命周期操作进行中（防连点：全部按钮禁用） */
+const busy = ref(false);
+/** 生命周期操作失败的用户可读文案（成功路径不产生文案，直接重载视图） */
+const serverError = ref("");
+/** 完成计划确认弹窗；放弃两步弹窗当前所在阶段（null = 关闭） */
+const pendingComplete = ref(false);
+const abortStage = ref<"info" | "type" | null>(null);
+
+/** 所有任务已完成（≥1 个任务）——「完成计划」亮起条件（PlanCompletionConfirm） */
+const allTasksDone = computed(
+  () => plan.value != null && plan.value.tasks.length > 0 && plan.value.tasks.every((t) => t.status === "Completed"),
+);
+
+/** 已推进的小时数（子目标任务按已完成子目标耗时；无子目标任务的汇报 07 接线后计入） */
+const progressedHours = computed(() => {
+  if (!plan.value) return "0";
+  const done = plan.value.tasks.reduce(
+    (sum, t) => sum + (t.has_subgoals ? taskProgress(t).completed : 0),
+    0,
+  );
+  return hoursFromMinutes(done);
+});
 
 /** 简述与名称相同（留空回退的产物）或为空时不显示——避免两行一模一样 */
 const showSummary = computed(
@@ -154,6 +299,31 @@ function onSaved() {
 function onCancel() {
   editing.value = false;
   load();
+}
+
+/** 生命周期操作统一通道：busy 互斥、错误转文案、成功后重载（close* 收掉对应弹窗） */
+async function runLifecycle(
+  action: () => Promise<unknown>,
+  close: { closeComplete?: boolean; closeAbort?: boolean } = {},
+) {
+  busy.value = true;
+  serverError.value = "";
+  try {
+    await action();
+    if (close.closeComplete) pendingComplete.value = false;
+    if (close.closeAbort) abortStage.value = null;
+    await load();
+  } catch (err) {
+    serverError.value = planErrorMessage(err as { kind?: string });
+  } finally {
+    busy.value = false;
+  }
+}
+
+/** 复制并新建（终态唯一重启路径）：成功后跳到新计划详情 */
+async function copyAsNew() {
+  const newId = await copyPlanAsNew(plan.value!.id);
+  await router.push(`/control-panel/plans/${newId}`);
 }
 
 onMounted(load);
@@ -202,11 +372,22 @@ watch(() => route.params.id, load);
   flex-wrap: wrap;
 }
 
+.title-col {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .title-row {
   display: flex;
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.pause-reason {
+  margin: 0;
+  font-size: 12px;
 }
 
 .header-actions {
@@ -217,7 +398,15 @@ watch(() => route.params.id, load);
 
 .lifecycle {
   display: inline-flex;
-  gap: 6px;
+  gap: 8px;
+}
+
+.server-error {
+  margin: 0;
+  color: var(--color-danger);
+  border: 1px solid var(--color-danger);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
 }
 
 .detail-body {

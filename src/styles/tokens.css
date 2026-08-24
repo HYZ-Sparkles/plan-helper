@@ -21,6 +21,7 @@
   --color-done: #16a34a; /* green-600 完成 */
   --color-progress: #d97706; /* amber-600 进行 */
   --color-danger: #dc2626; /* red-600 警示 */
+  --color-danger-bg: #fee2e2; /* red-100 危险按钮 hover 底 */
 
   /* 文字三档 */
   --text-primary: #1c1917; /* stone-800 */
@@ -96,18 +97,30 @@ body.transparent-root {
   border: var(--border-active);
 }
 
-/* 主操作按钮（创建计划 / 确认 等带文字的主按钮，IconFont 例外保留文字） */
-.primary-btn {
-  display: inline-block;
-  padding: 9px 24px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--primary);
-  color: var(--bg-base);
+/* ---- 按钮体系（全应用唯一形态来源；文字按钮 4 档 + 图标按钮 1 档）----
+   尺寸基准：文字按钮内容高 21px（14px × 1.5）——primary/danger 无边框 padding 9px 24px，
+   ghost 系有 1px 边框 padding 8px 16px，四档严格等高（39px），成对出现不歪。 */
+.primary-btn,
+.ghost-btn,
+.danger-btn,
+.danger-ghost-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   font: inherit;
   font-weight: 600;
-  text-decoration: none;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  text-decoration: none;
+}
+
+/* 主操作按钮（创建计划 / 确认 / 开始 等带文字的主按钮） */
+.primary-btn {
+  padding: 9px 24px;
+  border: none;
+  background: var(--primary);
+  color: var(--bg-base);
 }
 
 .primary-btn:hover {
@@ -119,21 +132,17 @@ body.transparent-root {
   cursor: not-allowed;
 }
 
-/* 次级按钮（取消 / 占位禁用等，与主按钮成对出现） */
+/* 次级按钮（取消 / 暂停 等与主按钮成对出现的操作） */
 .ghost-btn {
-  display: inline-block;
-  padding: 6px 14px;
+  padding: 8px 16px;
   border: var(--border-default);
-  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--text-secondary);
-  font: inherit;
-  font-size: 14px;
-  cursor: pointer;
+  font-weight: 400;
 }
 
 .ghost-btn:hover:not(:disabled) {
-  border: var(--border-active);
+  border-color: var(--primary);
   color: var(--text-primary);
 }
 
@@ -141,4 +150,130 @@ body.transparent-root {
   color: var(--text-muted);
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* 危险主操作（打字确认弹窗的最终执行按钮） */
+.danger-btn {
+  padding: 9px 24px;
+  border: none;
+  background: var(--color-danger);
+  color: var(--bg-base);
+}
+
+.danger-btn:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.danger-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 危险次操作（放弃计划等破坏性入口，与主按钮成对出现） */
+.danger-ghost-btn {
+  padding: 8px 16px;
+  border: 1px solid var(--color-danger);
+  background: var(--surface);
+  color: var(--color-danger);
+  font-weight: 400;
+}
+
+.danger-ghost-btn:hover:not(:disabled) {
+  background: var(--color-danger-bg);
+}
+
+.danger-ghost-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 图标按钮（无文字的小操作）：默认中性（hover 主色）；删除类加 .danger 变体（hover 红） */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  color: var(--primary);
+  background: var(--bg-accent-group);
+}
+
+.icon-btn.danger:hover {
+  color: var(--color-danger);
+  background: var(--color-danger-bg);
+}
+
+/* 文字链接型按钮（弹层 footer 的"今天/清除"等轻操作） */
+.link-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.link-btn:hover {
+  color: var(--primary);
+}
+
+/* 键盘可达性：文字与图标按钮聚焦统一可见；原生 button 兜底覆盖特型按钮（filter/add-task/日历格） */
+.primary-btn:focus-visible,
+.ghost-btn:focus-visible,
+.danger-btn:focus-visible,
+.danger-ghost-btn:focus-visible,
+.icon-btn:focus-visible,
+.link-btn:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ---- 弹窗骨架（ConfirmDialog / TypeConfirmDialog 共用，不重复 scoped）---- */
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--overlay-dim);
+  z-index: 100;
+}
+
+.dialog {
+  width: min(420px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 24px;
+  border: var(--border-default);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.dialog-title {
+  margin: 0;
+  font-size: 16px;
+}
+
+.dialog-body {
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }

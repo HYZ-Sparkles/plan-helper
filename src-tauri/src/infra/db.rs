@@ -20,7 +20,21 @@ pub fn open_in_memory() -> rusqlite::Result<Connection> {
 
 fn init(conn: &Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.execute_batch(SCHEMA)
+    conn.execute_batch(SCHEMA)?;
+    backfill_columns(conn)
+}
+
+/// 工单 05 给 plans 补 pause_reason 列：CREATE TABLE IF NOT EXISTS 不会给已存在的旧库加列，
+/// 幂等 ALTER 兜底开发期数据（spec 排除正式迁移，这里只是加列回填）。
+fn backfill_columns(conn: &Connection) -> rusqlite::Result<()> {
+    let has_pause_reason: bool = conn
+        .prepare("SELECT COUNT(*) FROM pragma_table_info('plans') WHERE name = 'pause_reason'")?
+        .query_row([], |row| row.get::<_, i64>(0))
+        .map(|n| n > 0)?;
+    if !has_pause_reason {
+        conn.execute("ALTER TABLE plans ADD COLUMN pause_reason TEXT", [])?;
+    }
+    Ok(())
 }
 
 const SCHEMA: &str = "
@@ -42,6 +56,7 @@ CREATE TABLE IF NOT EXISTS plans (
     due_date     TEXT,                             -- 仅展示，YYYY-MM-DD
     status       TEXT NOT NULL DEFAULT 'NotStarted',
     created_at   TEXT NOT NULL,                    -- RFC3339
+    pause_reason TEXT,                             -- 非 NULL = 暂停原因：UserInitiated | AutoPreempted
     sort_override INTEGER                           -- 手动排序（工单 05），NULL = 默认排序
 );
 

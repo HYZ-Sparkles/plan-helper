@@ -66,6 +66,29 @@ impl PlanStatus {
     }
 }
 
+/// 暂停原因（CONTEXT PauseReason 二值）：手动暂停记 UserInitiated；
+/// AutoPreempted 由工单 12 的抢占逻辑写入。TEXT 列往返口径同 PlanStatus。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PauseReason {
+    UserInitiated,
+    AutoPreempted,
+}
+
+impl PauseReason {
+    pub fn as_db(self) -> &'static str {
+        match self {
+            PauseReason::UserInitiated => "UserInitiated",
+            PauseReason::AutoPreempted => "AutoPreempted",
+        }
+    }
+    pub fn from_db(s: &str) -> PauseReason {
+        match s {
+            "AutoPreempted" => PauseReason::AutoPreempted,
+            _ => PauseReason::UserInitiated,
+        }
+    }
+}
+
 /// 任务状态（CONTEXT：进度到 100% 自动转已完成，工单 07 接线）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TaskStatus {
@@ -165,6 +188,12 @@ pub enum PlanError {
     DependencyCycle { task_index: Option<usize> },
     /// 计划开始后优先级不可调整（spec 用户故事 12）
     PriorityLocked,
+    /// 计划状态不允许该操作（ADR-0001 单向瀑布外的转换；from = 当前状态）
+    PlanStatusInvalid { from: PlanStatus },
+    /// "复制并新建"仅终态计划可用（from = 当前状态）
+    PlanNotTerminal { from: PlanStatus },
+    /// 完成计划要求所有任务已完成（PlanCompletionConfirm：任务自动、计划手动）
+    TasksNotCompleted,
     /// 已完成任务字段锁定，提交内容与库中不一致
     TaskLocked { index: usize },
     /// 提交任务集与库中现存任务不一致（缺失或未知 id）——删除必须显式走 delete_task
@@ -185,6 +214,8 @@ pub struct PlanView {
     pub priority: Priority,
     pub due_date: Option<String>,
     pub status: PlanStatus,
+    /// 非 NULL = 暂停原因（用户主动 / 自动抢占），详情页展示用
+    pub pause_reason: Option<PauseReason>,
     pub created_at: DateTime<Local>,
     pub tasks: Vec<TaskView>,
 }
@@ -408,8 +439,7 @@ impl PlanService {
     pub fn get(conn: &Connection, plan_id: i64) -> Result<PlanView, PlanError> {
         let mut plan = conn
             .query_row(
-                "SELECT id, name, summary, detail, priority, due_date, status, created_at
-                 FROM plans WHERE id = ?1",
+                &format!("SELECT {PLAN_COLS} FROM plans WHERE id = ?1"),
                 params![plan_id],
                 plan_row,
             )
@@ -439,11 +469,13 @@ impl PlanService {
         Ok(())
     }
 
-    /// 全部未软删除的计划（含任务），按 PlanOrdering 默认规则：
+    /// 全部未软删除的计划（含任务），排序规则（CONTEXT PlanOrdering）：
+    /// 手动排序优先——sort_override 非 NULL 的按 override 升序在前（手动调整过即接管全局，
+    /// 默认规则对其不再生效）；未覆盖的（含新建计划）按默认规则排在其后：
     /// Priority 降序 → CreatedAt 倒序 → id 倒序（同秒创建时新的在前）。
     pub fn list(conn: &Connection) -> Result<Vec<PlanView>, PlanError> {
         let mut plans = conn
-            .prepare("SELECT id, name, summary, detail, priority, due_date, status, created_at FROM plans")
+            .prepare(&format!("SELECT {PLAN_COLS} FROM plans"))
             .map_err(db_err)?
             .query_map([], plan_row)
             .map_err(db_err)?
@@ -455,13 +487,36 @@ impl PlanService {
                 .find(|p| p.id == plan_id)
                 .map(|p| p.tasks.push(task));
         }
+        let overrides = load_sort_overrides(conn)?;
         plans.sort_by(|a, b| {
-            b.priority
-                .cmp(&a.priority)
-                .then_with(|| b.created_at.cmp(&a.created_at))
-                .then_with(|| b.id.cmp(&a.id))
+            let oa = overrides.get(&a.id).copied().flatten();
+            let ob = overrides.get(&b.id).copied().flatten();
+            match (oa, ob) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => default_order_cmp(a, b),
+            }
         });
         Ok(plans)
+    }
+
+    /// 手动排序持久化（工单 05）：按传入顺序写 sort_override = 0..n。
+    /// 前端传"全部计划的完整顺序"（过滤视图内拖拽由前端先并回全量序），
+    /// 因此一次拖拽即接管全局排序；未在数组中的计划（软删除等边缘）覆盖置 NULL 回默认。
+    pub fn set_order(conn: &Connection, ordered_ids: &[i64]) -> Result<(), PlanError> {
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
+        tx.execute("UPDATE plans SET sort_override = NULL", [])
+            .map_err(db_err)?;
+        for (pos, id) in ordered_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE plans SET sort_override = ?1 WHERE id = ?2",
+                params![pos as i32, id],
+            )
+            .map_err(db_err)?;
+        }
+        tx.commit().map_err(db_err)?;
+        Ok(())
     }
 
     /// 任务派生进度（ADR-0002）：改耗时/增删未完成子目标后自动缩放——
@@ -688,6 +743,45 @@ fn load_subgoals(conn: &Connection, task_id: i64) -> Result<Vec<SubGoalView>, Pl
     .map_err(db_err)
 }
 
+/// plans 表查询列（get/list 共用，避免列清单两处漂移）
+pub(crate) const PLAN_COLS: &str = "id, name, summary, detail, priority, due_date, status, created_at, pause_reason";
+
+/// 默认排序比较（未被手动覆盖的计划之间）：Priority 降序 → CreatedAt 倒序 → id 倒序
+fn default_order_cmp(a: &PlanView, b: &PlanView) -> std::cmp::Ordering {
+    b.priority
+        .cmp(&a.priority)
+        .then_with(|| b.created_at.cmp(&a.created_at))
+        .then_with(|| b.id.cmp(&a.id))
+}
+
+/// 全部计划的手动排序值（id → sort_override）；list 排序用
+fn load_sort_overrides(conn: &Connection) -> Result<std::collections::HashMap<i64, Option<i32>>, PlanError> {
+    conn.prepare("SELECT id, sort_override FROM plans")
+        .map_err(db_err)?
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i32>>(1)?)))
+        .map_err(db_err)?
+        .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()
+        .map_err(db_err)
+}
+
+/// 计划的 (状态, 暂停原因)；生命周期服务判定转换合法性用（单行查询，不存在归 NotFound）。
+pub(crate) fn load_plan_state(
+    conn: &Connection,
+    plan_id: i64,
+) -> Result<(PlanStatus, Option<PauseReason>), PlanError> {
+    conn.query_row(
+        "SELECT status, pause_reason FROM plans WHERE id = ?1",
+        params![plan_id],
+        |row| {
+            Ok((
+                PlanStatus::from_db(&row.get::<_, String>(0)?),
+                row.get::<_, Option<String>>(1)?.map(|s| PauseReason::from_db(&s)),
+            ))
+        },
+    )
+    .map_err(notfound_or_db)
+}
+
 /// plans 表行 → PlanView（tasks 由调用方填充）
 fn plan_row(row: &Row) -> rusqlite::Result<PlanView> {
     Ok(PlanView {
@@ -701,6 +795,9 @@ fn plan_row(row: &Row) -> rusqlite::Result<PlanView> {
         created_at: DateTime::parse_from_rfc3339(&row.get::<_, String>(7)?)
             .unwrap()
             .with_timezone(&Local),
+        pause_reason: row
+            .get::<_, Option<String>>(8)?
+            .map(|s| PauseReason::from_db(&s)),
         tasks: Vec::new(),
     })
 }

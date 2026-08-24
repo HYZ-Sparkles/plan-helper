@@ -1,19 +1,15 @@
 //! 工单 04 接缝测试：子目标（精简输入行 → 落库/编辑/锁定/清空）、任务依赖
 //!（同计划/成环/解除/等待判定）、进度按已完成分钟数自动缩放。
 
-use chrono::{Local, TimeZone};
 
-use plan_helper_lib::clock::FixedClock;
 use plan_helper_lib::domain::deps::DependencyService;
 use plan_helper_lib::domain::plans::{
     PlanDraft, PlanError, PlanService, Priority, SubGoalDraft, TaskDraft, TaskStatus,
 };
 use plan_helper_lib::infra::db;
 
-/// 固定时钟（本地时区）
-fn at(y: i32, mo: u32, d: u32, h: u32, mi: u32) -> FixedClock {
-    FixedClock(Local.with_ymd_and_hms(y, mo, d, h, mi, 0).unwrap())
-}
+mod common;
+use common::{at, draft_of, force_subgoal_completed, force_task_status, plain_task};
 
 /// 子目标草稿快捷构造（无 id = 新行）
 fn sub(name: &str, minutes: u32) -> SubGoalDraft {
@@ -38,20 +34,6 @@ fn subgoal_task(name: &str, subs: Vec<SubGoalDraft>) -> TaskDraft {
     }
 }
 
-/// 无子目标、无依赖的普通任务草稿
-fn plain_task(name: &str, minutes: u32) -> TaskDraft {
-    TaskDraft {
-        id: None,
-        name: name.into(),
-        summary: String::new(),
-        detail: String::new(),
-        has_subgoals: false,
-        estimated_minutes: Some(minutes),
-        subgoals: Vec::new(),
-        depends_on: Vec::new(),
-    }
-}
-
 /// 单任务计划草稿外壳
 fn plan_of(tasks: Vec<TaskDraft>) -> PlanDraft {
     PlanDraft {
@@ -62,57 +44,6 @@ fn plan_of(tasks: Vec<TaskDraft>) -> PlanDraft {
         due_date: None,
         tasks,
     }
-}
-
-/// 从库中视图构造编辑草稿（UI 编辑态装载的镜像：任务与子目标都带 id）
-fn draft_of(p: &plan_helper_lib::domain::plans::PlanView) -> PlanDraft {
-    PlanDraft {
-        name: p.name.clone(),
-        summary: p.summary.clone(),
-        detail: p.detail.clone(),
-        priority: p.priority,
-        due_date: p.due_date.clone(),
-        tasks: p
-            .tasks
-            .iter()
-            .map(|t| TaskDraft {
-                id: Some(t.id),
-                name: t.name.clone(),
-                summary: t.summary.clone(),
-                detail: t.detail.clone(),
-                has_subgoals: t.has_subgoals,
-                estimated_minutes: t.estimated_minutes,
-                subgoals: t
-                    .subgoals
-                    .iter()
-                    .map(|s| SubGoalDraft {
-                        id: Some(s.id),
-                        name: s.name.clone(),
-                        estimated_minutes: s.estimated_minutes,
-                    })
-                    .collect(),
-                depends_on: Vec::new(),
-            })
-            .collect(),
-    }
-}
-
-/// 直接落库子目标完成态（汇报路径工单 07 接通；测试用 SQL 制造已完成这一前置状态）
-fn force_subgoal_completed(conn: &rusqlite::Connection, subgoal_id: i64) {
-    conn.execute(
-        "UPDATE subgoals SET completed_at = '2026-08-24T10:00:00+08:00' WHERE id = ?1",
-        rusqlite::params![subgoal_id],
-    )
-    .unwrap();
-}
-
-/// 直接落库任务状态（同 seam_plans 的种子手法）
-fn force_task_status(conn: &rusqlite::Connection, task_id: i64, status: TaskStatus) {
-    conn.execute(
-        "UPDATE tasks SET status = ?1 WHERE id = ?2",
-        rusqlite::params![status.as_db(), task_id],
-    )
-    .unwrap();
 }
 
 /// 库中依赖边计数（断言边真删/真建用）
