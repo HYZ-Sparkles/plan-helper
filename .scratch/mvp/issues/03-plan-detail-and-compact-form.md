@@ -25,6 +25,12 @@
 - 截止日期原生控件占位"YYYY/MM/日"（浏览器内置改不掉）：改文本输入 + `isValidDateString` 失焦校验——用户确认方案。
 - 详情页空字段显示"（未填写）"廉价 + 简述=名称重复：空字段整行隐藏、简述与名称相同不显示（列表卡同规则）——用户确认方案。
 
+### 验收反馈修正（2026-08-24，第二轮手动验收）
+
+- 拖拽修复已验证通过。
+- 日期输入仍不友好 + 错误红字顶歪字段对齐：联网调研成熟库（@vuepic/vue-datepicker 体积 +100KB 起、v-calendar 偏日历展示）后用户选定**自制月历弹层**（`DatePicker.vue`，零依赖 +10KB，工单 13 日期例外复用）；手打三格式归一（`normalizeDateString`），非法失焦回退，不再有错误红字。
+- 对齐修复：计划字段行（优先级+截止日期）改顶部对齐、分段控件与输入框等高（min-height 36px）——错误/高度差不再挤歪旁边字段。
+
 ### 实现说明
 
 - Rust：`NewPlan/NewTask` 改名 `PlanDraft/TaskDraft`（任务草稿带可选 id，创建/编辑共用）；`PlanService::get`（详情）/ `update`（整计划编辑）/ `delete_task`（软删除归档）+ 8 个新接缝测试。update 不变量：已开始锁优先级、已完成任务内容锁定（TaskLocked）、任务集一致（TaskSetMismatch，删除显式走 delete_task）、未完成按提交序在前 + 已完成按库内序沉底。

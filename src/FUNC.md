@@ -17,13 +17,14 @@
   - `priorityLabel` / `statusLabel`（计划与任务状态合一张表，共有值标签一致）映射表
   - `planErrorMessage(err)` — 后端 PlanError（{kind,payload}）→ 用户可读文案
   - `hoursFromMinutes(minutes)` — 分钟 → 小时展示
-- `src/lib/validation.ts` — 表单输入校验小函数：
-  - `isValidDateString(s)` — 严格校验 YYYY-MM-DD 真实日历日期（回读比对挡 2026-02-30 类假日期）；CreationForm 截止日期用（原生 date 控件中文占位改不掉，故文本输入 + 自校验）
+- `src/lib/validation.ts` — 表单输入校验/归一工具：
+  - `normalizeDateString(s)` — 常见日期写法（2026-12-20 / 2026/12/20 / 20261220）归一为 YYYY-MM-DD；非真实日历日期（含 2026-02-30）返回 null。DatePicker 失焦归一用，值要么合法要么回退，调用方免校验。
 
 ## 复用组件（src/components/）
 
 - `CreationForm.vue` — **CreationUI 单页可折叠表单（创建/编辑双模式，工单 03）**：`mode: "create" | "edit"` + 编辑态 `plan: PlanView`；任务卡默认收起为一行摘要（拖拽手柄 + 名称 + 耗时/子目标标记）、点行展开、HTML5 拖拽排序、已完成任务锁定、优先级开始后锁定、删已入库任务走打字确认。emit `saved` / `cancel`。
 - `TypeConfirmDialog.vue` — 打字确认的危险操作弹窗（默认打「再删」）；父组件 v-if 控制显隐，emit `confirm` / `cancel`。删任务（03）与放弃计划（05）共用。
+- `DatePicker.vue` — 轻量日期选择（自制月历弹层，零依赖）：v-model 为 `""` 或合法 YYYY-MM-DD（组件自身保证合法性，调用方免校验）；日历点选 + 手打归一（失焦非法回退）。工单 13（设置-日期例外）复用。
 - `PriorityLabel.vue` — 优先级标签（文字 + PhCaretUp/PhMinus/PhCaretDown + 标签底色，PriorityVisuals）。全应用优先级展示统一走它。
 - `StatusBadge.vue` — 计划/任务状态徽章（中文 + 状态色边框）。
 - `CollapsibleSection.vue` — 可折叠区块（title + 可选 badge + defaultOpen），CreationUI 段落容器。

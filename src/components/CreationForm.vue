@@ -34,14 +34,8 @@
             </div>
             <span v-if="priorityLocked" class="hint lock-hint">计划开始后优先级不可调整</span>
           </FormField>
-          <FormField label="截止日期" :error="planErrors.dueDate">
-            <input
-              v-model="plan.dueDate"
-              class="input"
-              placeholder="选填 · 格式 2026-12-20"
-              @input="planErrors.dueDate = ''"
-              @blur="checkDueDate"
-            />
+          <FormField label="截止日期">
+            <DatePicker v-model="plan.dueDate" />
           </FormField>
         </div>
       </div>
@@ -181,6 +175,7 @@ import {
 } from "@phosphor-icons/vue";
 import AutoTextarea from "./AutoTextarea.vue";
 import CollapsibleSection from "./CollapsibleSection.vue";
+import DatePicker from "./DatePicker.vue";
 import FormField from "./FormField.vue";
 import PriorityLabel from "./PriorityLabel.vue";
 import StatusBadge from "./StatusBadge.vue";
@@ -195,7 +190,6 @@ import {
   type TaskStatus,
 } from "../lib/api";
 import { hoursFromMinutes, planErrorMessage, statusLabel } from "../lib/labels";
-import { isValidDateString } from "../lib/validation";
 
 /** 任务表单行（hours 是输入态字符串，提交时换算分钟；collapsed 是紧凑卡收起态） */
 interface TaskForm {
@@ -254,8 +248,8 @@ const tasks = reactive<TaskForm[]>(
   isEdit && props.plan ? props.plan.tasks.map(taskFormOf) : [{ ...blankTask() }],
 );
 
-/** 各段独立校验错误：计划段两条（名称/截止日期）、每张任务卡一条（按段/卡显示，互不阻塞其它段） */
-const planErrors = reactive({ name: "", dueDate: "" });
+/** 各段独立校验错误：计划段名称一条、每张任务卡一条（按段/卡显示，互不阻塞其它段） */
+const planErrors = reactive({ name: "" });
 const taskErrors = reactive<Record<number, { name?: string; hours?: string }>>({});
 const serverError = ref("");
 const saving = ref(false);
@@ -318,18 +312,11 @@ async function confirmDelete() {
   }
 }
 
-/** 失焦即时校验截止日期（原生 date 控件的占位文案改不掉，故用文本输入 + 自校验） */
-function checkDueDate() {
-  planErrors.dueDate = plan.dueDate.trim() && !isValidDateString(plan.dueDate.trim())
-    ? "日期格式不合法，应为 2026-12-20 这样的格式"
-    : "";
-}
-
-/** 保存前 UI 按段校验（领域层还有权威校验兜底）；出错的任务卡自动展开 */
+/** 保存前 UI 按段校验（领域层还有权威校验兜底）；出错的任务卡自动展开。
+ *  截止日期不在这里查——DatePicker 组件自身保证值要么为空要么是合法 YYYY-MM-DD。 */
 function validate(): boolean {
   planErrors.name = plan.name.trim() ? "" : "请填写计划名称";
-  checkDueDate();
-  let ok = !planErrors.name && !planErrors.dueDate;
+  let ok = !planErrors.name;
   for (const [i, t] of tasks.entries()) {
     const errs: { name?: string; hours?: string } = {};
     if (!t.name.trim()) errs.name = "请填写任务名称";
@@ -401,12 +388,20 @@ async function save() {
   flex-wrap: wrap;
 }
 
+/* 计划段字段行（优先级+截止日期）顶部对齐：两字段都有标签行，控件起点一致；
+   行内错误/控件高度差不再把旁边字段顶歪 */
+.plan-fields .field-row {
+  align-items: flex-start;
+}
+
 .input.small {
   width: 120px;
 }
 
 .segmented {
   display: inline-flex;
+  align-items: stretch;
+  min-height: 36px; /* 与 .input 控件等高，行内两控件基线一致 */
   border: var(--border-default);
   border-radius: var(--radius-sm);
   overflow: hidden;
@@ -422,8 +417,11 @@ async function save() {
 }
 
 .segment {
+  flex: 1;
   display: inline-flex;
-  padding: 4px 12px;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 14px;
   border: none;
   border-right: var(--border-default);
   background: var(--surface);
