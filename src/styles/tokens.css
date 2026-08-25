@@ -66,9 +66,11 @@ body {
   line-height: 1.5;
 }
 
-/* 无边框透明窗口（桌宠 / 小看板）需要透明根背景 */
+/* 无边框透明窗口（桌宠 / 小看板）需要透明根背景 + 切断 webview 默认滚动条
+   （main.ts 用 transparentLabels 收口到 pet / mini-board，其它窗口不受影响） */
 body.transparent-root {
   background: transparent;
+  overflow: hidden;
 }
 
 /* 通用工具类（全局复用，组件不再 scoped 重复定义） */

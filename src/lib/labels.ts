@@ -82,7 +82,7 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
     case "ProgressLocked":
       return "任务已完成，进度锁定不可再变更";
     case "PercentInvalid":
-      return "百分比必须是 5 的倍数（汇报 5–100，修正 0–100）";
+      return "百分比必须是正数且不超过 100（汇报至少 0.1%，修正可归零；最多一位小数）";
     case "PercentOverflow":
       return "累计汇报会超过 100%，请调小本次增量";
     case "NotPercentTask":
@@ -94,9 +94,12 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
   }
 }
 
-/** 分钟 → 展示小时（如 90 → "1.5"）；供预计耗时展示复用 */
+/** 分钟 → 小时展示（一位小数 round，与 ProgressGranularity 0.1% 颗粒度对齐）：
+ *  `Math.round((minutes/60)*10)/10` 解决 IEEE 754 浮点尾巴暴露（例 258.6/60 = 4.3099999...）
+ *  被 toString 直接吐成 "4.309999999999999" / 10h；整数小时经 round 后 .toString() 保持自然位数
+ *  （120 → "2"、90 → "1.5"），不强制追加 ".0"。 */
 export function hoursFromMinutes(minutes: number): string {
-  return (minutes / 60).toString();
+  return (Math.round((minutes / 60) * 10) / 10).toString();
 }
 
 /** 分钟 → 固定一位小数的小时文案（X.X 口径，如 90 → "1.5"、180 → "3.0"）；

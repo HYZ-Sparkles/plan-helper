@@ -19,14 +19,14 @@
 - `src/lib/labels.ts` — 领域枚举的中文文案集中地：
   - `priorityLabel` / `statusLabel`（计划与任务状态合一张表，共有值标签一致）/ `pauseReasonLabel`（用户主动 / 自动抢占）映射表
   - `planErrorMessage(err)` — 后端 PlanError（{kind,payload}）→ 用户可读文案
-  - `hoursFromMinutes(minutes)` — 分钟 → 小时展示
+  - `hoursFromMinutes(minutes)` — 分钟 → **一位小数 round** 的小时展示（与 ProgressGranularity 0.1% 颗粒度对齐），消 IEEE 754 浮点尾巴（例 258.6/60 = 4.3099999... 不再吐成 "4.3099999..." 而是 "4.3"）；整数小时经 round 后 `.toString()` 保持自然位数（120 → "2"、90 → "1.5"），不强制追加 ".0"；同步口径见后端 `domain::plans::round_to_one_decimal`
 - `src/lib/progress.ts` — 前端进度派生（ADR-0002）：工单 07 起百分比由服务端统一派生（`TaskView.progress_percent`，无子目标任务的汇报进度也来自 ProgressLog），前端只换算展示——
-  - `taskProgress(task)` — (已完成分钟, 总分钟)，分钟 = 派生百分比 × 总耗时（展示口径）
-  - `taskProgressLabel(task)` — "60%" 百分比文案；总量为 0 返回空串。详情页对勾了子目标但总量为 0 的任务以 `|| "0%"` 兜底展示
+  - `taskProgress(task)` — (已完成分钟, 总分钟)，分钟 = 派生百分比 × 总耗时（**已 round 一位小数**——与后端 `TaskProgress::percent()` 一位小数口径同步，消二次派生引入的浮点尾巴）；展示口径
+  - `taskProgressLabel(task)` — "60.3%" / "60%" 百分比文案（后端已 round 一位小数，前端 toString 自然输出：整数不带 ".0"、一位小数带小数点——与 `hoursFromMinutes` 口径一致）；总量为 0 返回空串。详情页对勾了子目标但总量为 0 的任务以 `|| "0%"` 兜底展示。不要二次 `Math.round`——会抹掉一位小数。
 - `src/lib/validation.ts` — 表单输入校验/归一工具：
   - `normalizeDateString(s)` — 常见日期写法（2026-12-20 / 2026/12/20 / 20261220）归一为 YYYY-MM-DD；非真实日历日期（含 2026-02-30）返回 null。DatePicker 失焦归一用，值要么合法要么回退，调用方免校验。
-  - `isValidPercentStep(v, min)` — 百分比档位校验（整数 + 5 的倍数 + [min,100]；汇报 min=5 / 修正 min=0）。小看板直填（07）与详情页修正弹窗（07）共用；后端另有权威校验，这里只做即时反馈。
-- `src/lib/labels.ts#hoursLabel(minutes)` — 分钟 → **固定一位小数**的小时文案（X.X 口径，180 → "3.0"）；大面板状态条累计/差额、小看板今日总量行与工单 10 结转标注（"基准 5.0h"）复用。行内任务耗时展示仍走 `hoursFromMinutes`（自然位数）。
+  - `isValidPercentValue(v, min)` — 百分比数值校验（任意正数 + 最多一位小数 + [min, 100]；汇报 min=0.1 / 修正 min=0——2026-08-24 验收修订砍掉原"5 倍数"颗粒度）。一位小数判定用容差 1e-9（JS 浮点 0.1/0.3/0.7 等不可精确表示，严格等式会误拒合法输入；与后端 `valid_percent` 对齐）。小看板直填（07）与详情页修正弹窗（07）共用；后端另有权威校验，这里只做即时反馈。
+- `src/lib/labels.ts#hoursLabel(minutes)` — 分钟 → **固定一位小数**的小时文案（X.X 口径，180 → "3.0"）；大面板状态条累计/差额、小看板今日总量行与工单 10 结转标注（"基准 5.0h"）复用。行内任务耗时展示走 `hoursFromMinutes`（同步改为一位小数 round 口径，整数保持自然显示）。
 
 ## 复用组件（src/components/）
 

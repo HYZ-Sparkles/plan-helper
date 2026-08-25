@@ -280,12 +280,13 @@ export function undoSubgoal(subgoalId: number): Promise<void> {
   return invoke<void>("undo_subgoal", { subgoalId });
 }
 
-/** 无子目标任务增量汇报 +percent%（5–100 的 5 倍数，累计不超 100%） */
+/** 无子目标任务增量汇报 +percent%（任意正数：最小 0.1%、最多一位小数，累计不超 100%；
+ *  2026-08-24 验收修订，原"5% 倍数"颗粒度砍掉） */
 export function reportPercent(taskId: number, percent: number): Promise<void> {
   return invoke<void>("report_percent", { taskId, percent });
 }
 
-/** 修正总进度（直接设定当前值 0–100 的 5 倍数；仅无子目标任务） */
+/** 修正总进度（直接设定当前值 0–100、最多一位小数；仅无子目标任务） */
 export function correctTotalProgress(taskId: number, percent: number): Promise<void> {
   return invoke<void>("correct_total_progress", { taskId, percent });
 }

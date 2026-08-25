@@ -204,7 +204,8 @@ pub enum PlanError {
     SubGoalNotCompleted,
     /// 已完成任务进度锁定：不可汇报 / 撤销 / 修正（CONTEXT TaskStatus）
     ProgressLocked,
-    /// 百分比非法（汇报 5–100、修正 0–100，都必须是 5 的倍数）
+    /// 百分比非法（汇报 0.1–100、修正 0–100；正数、最多一位小数——
+    /// 2026-08-24 验收修订，原"5% 倍数"颗粒度砍掉）
     PercentInvalid,
     /// 累计汇报将超过 100%（ProgressGranularity 增量上限）
     PercentOverflow,
@@ -274,7 +275,10 @@ pub struct TaskProgress {
 }
 
 impl TaskProgress {
-    /// 百分比（0–100）；总耗时为 0 视为 0（validate 已保证 > 0，纯防御）
+    /// 百分比（0–100）；总耗时为 0 视为 0（validate 已保证 > 0，纯防御）。
+    /// 保持原始 f64 精度——这是领域语义值（分子不变分母变缩放后 60/140 = 42.857142857142854
+    /// 必须如实保留，UI 展示层再 round）；存储 / 派生边界 round 在 `report_percent` / `correct_total`
+    /// 写日志前完成，前端 `hoursFromMinutes` / `taskProgress` 显示层也兜底 round。
     pub fn percent(&self) -> f64 {
         if self.total_minutes == 0 {
             0.0

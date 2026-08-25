@@ -66,28 +66,29 @@ fn today_minutes(conn: &rusqlite::Connection) -> f64 {
 
 #[test]
 fn percent_reports_derive_from_log_and_auto_complete() {
-    // 测试情况：120 分钟无子目标任务，先报 +10% 再报 +30%，最后补到 100% 后继续报。
-    // 正确结果：每次汇报都是增量落账（progress_log 两条 +12/+36）；
-    //           派生进度 10% → 40%（= 日志求和 / 总耗时）；首次汇报任务转进行中；
+    // 测试情况：120 分钟无子目标任务，先报 +10% 再报 +27.5%（2026-08-24 修订后
+    //           允许任意一位小数步进），最后补到 100% 后继续报。
+    // 正确结果：每次汇报都是增量落账（progress_log 两条 +12/+33）；
+    //           派生进度 10% → 37.5%（= 日志求和 / 总耗时）；首次汇报任务转进行中；
     //           到 100% 自动转已完成并锁定（再报 ProgressLocked）；今日完成量 = 求和。
     let conn = db::open_in_memory().unwrap();
     let (_, task_id) = seeded(&conn, plain_task("背单词", 120));
 
-    let s1 = ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), task_id, 10).unwrap();
+    let s1 = ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), task_id, 10.0).unwrap();
     assert_eq!(s1, TaskStatus::Active, "首次推进：未开始 → 进行中");
-    let s2 = ProgressService::report_percent(&conn, &at(2026, 8, 24, 11, 0), task_id, 30).unwrap();
+    let s2 = ProgressService::report_percent(&conn, &at(2026, 8, 24, 11, 0), task_id, 27.5).unwrap();
     assert_eq!(s2, TaskStatus::Active);
-    assert!((current_percent(&conn) - 40.0).abs() < 1e-9, "40% = (12+36)/120");
-    assert!((today_minutes(&conn) - 48.0).abs() < 1e-9, "今日完成量 = 日志求和");
+    assert!((current_percent(&conn) - 37.5).abs() < 1e-9, "37.5% = (12+33)/120");
+    assert!((today_minutes(&conn) - 45.0).abs() < 1e-9, "今日完成量 = 日志求和");
     let rows: i64 = conn
         .query_row("SELECT COUNT(*) FROM progress_log", [], |r| r.get(0))
         .unwrap();
     assert_eq!(rows, 2, "每次汇报各追加一条事件");
 
-    let s3 = ProgressService::report_percent(&conn, &at(2026, 8, 24, 13, 0), task_id, 60).unwrap();
+    let s3 = ProgressService::report_percent(&conn, &at(2026, 8, 24, 13, 0), task_id, 62.5).unwrap();
     assert_eq!(s3, TaskStatus::Completed, "累计 100% 自动完成");
     assert_eq!(
-        ProgressService::report_percent(&conn, &at(2026, 8, 24, 14, 0), task_id, 5),
+        ProgressService::report_percent(&conn, &at(2026, 8, 24, 14, 0), task_id, 5.0),
         Err(PlanError::ProgressLocked),
         "已完成任务锁定，不可再汇报"
     );
@@ -98,18 +99,18 @@ fn percent_reports_derive_from_log_and_auto_complete() {
 
 #[test]
 fn percent_granularity_and_overflow_rejected() {
-    // 测试情况：120 分钟任务依次尝试 7% / 3% / 105% / 0%（非法颗粒度），
-    //           报到 95% 后再 +10%（溢出）与 +5%（恰好补满）。
-    // 正确结果：非 5 倍数与越界值全部 PercentInvalid 且不落账；
+    // 测试情况：120 分钟任务依次尝试 0.05%（两位小数）/ 100.5%（越界）/ 0 与 -5
+    //           （非正数），报到 99.5% 后再 +10%（溢出）与 +0.5%（恰好补满）。
+    // 正确结果：两位小数、越界、非正数全部 PercentInvalid 且不落账；
     //           超过 100% 的增量 PercentOverflow；恰好到 100% 的增量放行。
     let conn = db::open_in_memory().unwrap();
     let (_, task_id) = seeded(&conn, plain_task("阅读", 120));
 
-    for bad in [7u32, 3, 105, 0] {
+    for bad in [0.05, 100.5, 0.0, -5.0] {
         assert_eq!(
             ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), task_id, bad),
             Err(PlanError::PercentInvalid),
-            "{bad}% 不是 5–100 内的 5 倍数"
+            "{bad}% 非法（正数 / 一位小数 / ≤100 至少一条不满足）"
         );
     }
     let rows: i64 = conn
@@ -117,19 +118,50 @@ fn percent_granularity_and_overflow_rejected() {
         .unwrap();
     assert_eq!(rows, 0, "被拒的汇报不落账");
 
-    for step in [5u32; 19] {
-        ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 30), task_id, step).unwrap();
-    }
-    assert!((current_percent(&conn) - 95.0).abs() < 1e-9);
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 30), task_id, 99.0).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 40), task_id, 0.5).unwrap();
+    assert!((current_percent(&conn) - 99.5).abs() < 1e-9);
     assert_eq!(
-        ProgressService::report_percent(&conn, &at(2026, 8, 24, 11, 0), task_id, 10),
+        ProgressService::report_percent(&conn, &at(2026, 8, 24, 11, 0), task_id, 10.0),
         Err(PlanError::PercentOverflow),
-        "95% + 10% 越过 100%"
+        "99.5% + 10% 越过 100%"
     );
     assert_eq!(
-        ProgressService::report_percent(&conn, &at(2026, 8, 24, 11, 30), task_id, 5),
+        ProgressService::report_percent(&conn, &at(2026, 8, 24, 11, 30), task_id, 0.5),
         Ok(TaskStatus::Completed),
-        "95% + 5% 恰好补满，自动完成"
+        "99.5% + 0.5% 恰好补满，自动完成"
+    );
+}
+
+#[test]
+/// 派生 percent 一位小数 round（工单 07 验收补述 + CONTEXT ProgressGranularity）：
+/// 600 分钟任务反复 +0.1% 汇报，累计到 43.1%；期望 `current_percent()` 为干净的 43.1
+/// （而非 43.0999999...）；同步断言 ProgressLog 求和保留原始精度（ADR-0009 单一事实源），
+/// round 只发生在派生层，存储层不动。
+fn progress_percent_rounds_to_one_decimal() {
+    let conn = db::open_in_memory().unwrap();
+    let (_, task_id) = seeded(&conn, plain_task("代码", 600));
+
+    // 累计到 43.1%：一次 +40% + 三次 +1% + 一次 +0.1% = 43.1%
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), task_id, 40.0).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 5), task_id, 1.0).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 10), task_id, 1.0).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 15), task_id, 1.0).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 20), task_id, 0.1).unwrap();
+
+    let p = current_percent(&conn);
+    assert!((p - 43.1).abs() < 1e-9, "派生 percent 一位小数 round, got {p}");
+    // 存储层 ProgressLog 求和保持原始精度（240 + 6.000000000000001...），不因 round 失真
+    let sum: f64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(delta_minutes), 0.0) FROM progress_log",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        (sum - 258.6).abs() < 0.01,
+        "ProgressLog sum 接近 258.6 分钟（原始精度）, got {sum}"
     );
 }
 
@@ -162,7 +194,7 @@ fn subgoals_complete_in_order_and_auto_complete() {
         "重复勾选已完成子目标被拒"
     );
     assert_eq!(
-        ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 15), task_id, 5),
+        ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 15), task_id, 5.0),
         Err(PlanError::NotPercentTask),
         "有子目标任务不走百分比通道"
     );
@@ -233,13 +265,13 @@ fn correction_sets_absolute_value_and_logs_delta() {
     //           已完成 ProgressLocked；修正到 100% 自动完成。
     let conn = db::open_in_memory().unwrap();
     let (_, task_id) = seeded(&conn, plain_task("写作", 120));
-    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), task_id, 10).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), task_id, 10.0).unwrap();
 
-    ProgressService::correct_total(&conn, &at(2026, 8, 24, 11, 0), task_id, 70).unwrap();
-    assert!((current_percent(&conn) - 70.0).abs() < 1e-9);
-    ProgressService::correct_total(&conn, &at(2026, 8, 24, 12, 0), task_id, 20).unwrap();
+    ProgressService::correct_total(&conn, &at(2026, 8, 24, 11, 0), task_id, 62.5).unwrap();
+    assert!((current_percent(&conn) - 62.5).abs() < 1e-9, "一位小数设定值（2026-08-24 修订）");
+    ProgressService::correct_total(&conn, &at(2026, 8, 24, 12, 0), task_id, 20.0).unwrap();
     assert!((current_percent(&conn) - 20.0).abs() < 1e-9, "下调修正：负增量落账");
-    ProgressService::correct_total(&conn, &at(2026, 8, 24, 13, 0), task_id, 0).unwrap();
+    ProgressService::correct_total(&conn, &at(2026, 8, 24, 13, 0), task_id, 0.0).unwrap();
     assert!((current_percent(&conn) - 0.0).abs() < 1e-9, "归零修正");
     assert!((today_minutes(&conn) - 0.0).abs() < 1e-9, "对账后今日净完成量 = 0");
     let sources: Vec<String> = conn
@@ -252,9 +284,9 @@ fn correction_sets_absolute_value_and_logs_delta() {
     assert_eq!(sources, vec!["Percent", "Correction", "Correction", "Correction"]);
 
     assert_eq!(
-        ProgressService::correct_total(&conn, &at(2026, 8, 24, 14, 0), task_id, 12),
+        ProgressService::correct_total(&conn, &at(2026, 8, 24, 14, 0), task_id, 12.34),
         Err(PlanError::PercentInvalid),
-        "12% 不是 5 的倍数"
+        "12.34% 超过一位小数"
     );
     let sg_plan = PlanService::create(
         &conn,
@@ -264,14 +296,14 @@ fn correction_sets_absolute_value_and_logs_delta() {
     .unwrap();
     let sg_task = PlanService::get(&conn, sg_plan).unwrap().tasks[0].id;
     assert_eq!(
-        ProgressService::correct_total(&conn, &at(2026, 8, 24, 14, 0), sg_task, 50),
+        ProgressService::correct_total(&conn, &at(2026, 8, 24, 14, 0), sg_task, 50.0),
         Err(PlanError::NotPercentTask),
         "有子目标任务修正走撤销通道，不走百分比"
     );
 
-    ProgressService::correct_total(&conn, &at(2026, 8, 24, 15, 0), task_id, 100).unwrap();
+    ProgressService::correct_total(&conn, &at(2026, 8, 24, 15, 0), task_id, 100.0).unwrap();
     assert_eq!(
-        ProgressService::correct_total(&conn, &at(2026, 8, 24, 16, 0), task_id, 50),
+        ProgressService::correct_total(&conn, &at(2026, 8, 24, 16, 0), task_id, 50.0),
         Err(PlanError::ProgressLocked),
         "修正到 100% 自动完成后锁定"
     );
@@ -365,8 +397,8 @@ fn today_minutes_attributed_by_window_start_day() {
     )
     .unwrap();
 
-    ProgressService::report_percent(&conn, &at(2026, 8, 24, 20, 30), task_id, 10).unwrap();
-    ProgressService::report_percent(&conn, &at(2026, 8, 25, 0, 30), task_id, 20).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 20, 30), task_id, 10.0).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 25, 0, 30), task_id, 20.0).unwrap();
 
     let late_night = ProgressService::board(&conn, &at(2026, 8, 24, 23, 0)).unwrap().today_minutes;
     assert!((late_night - 36.0).abs() < 1e-9, "8/24 深夜读：12 + 24 都归 8/24，实际 {late_night}");
@@ -374,7 +406,7 @@ fn today_minutes_attributed_by_window_start_day() {
     assert!((after_midnight - 0.0).abs() < 1e-9, "8/25 凌晨读：凌晨段归 8/24，今日为 0，实际 {after_midnight}");
 
     // 8/25 10:00 不在任何窗口内（窗口只有 20:00–01:00）：归属自身日期 8/25
-    ProgressService::report_percent(&conn, &at(2026, 8, 25, 10, 0), task_id, 5).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 25, 10, 0), task_id, 5.0).unwrap();
     let day2 = ProgressService::board(&conn, &at(2026, 8, 25, 12, 0)).unwrap().today_minutes;
     assert!((day2 - 6.0).abs() < 1e-9, "窗口外推进归属自身日期 8/25，实际 {day2}");
 }

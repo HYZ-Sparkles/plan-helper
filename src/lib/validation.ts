@@ -20,10 +20,17 @@ export function normalizeDateString(s: string): string | null {
 }
 
 /**
- * 百分比档位校验（CONTEXT ProgressGranularity）：整数且为 5 的倍数、落在 [min, 100]。
- * 汇报档位 min = 5（小看板直填）、修正总进度 min = 0（详情页弹窗）；后端另有权威校验，
- * 这里只做即时反馈。
+ * 百分比数值校验（CONTEXT ProgressGranularity，2026-08-24 验收修订）：
+ * 任意正数、上限 100、最多一位小数；min 控制下限（汇报 0.1 / 修正 0）。
+ * 一位小数判定用容差 1e-9——JS 浮点 0.1/0.3/0.7 等不可精确表示，
+ * 严格等式 `Math.round(v*10) === v*10` 会误拒合法输入（与后端 `valid_percent` 对齐）。
+ * 后端另有权威校验，这里只做即时反馈。
  */
-export function isValidPercentStep(v: number, min: 0 | 5): boolean {
-  return Number.isInteger(v) && v % 5 === 0 && v >= min && v <= 100;
+export function isValidPercentValue(v: number, min: number): boolean {
+  return (
+    Number.isFinite(v) &&
+    v >= min &&
+    v <= 100 &&
+    Math.abs(v * 10 - Math.round(v * 10)) < 1e-9
+  );
 }

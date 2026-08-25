@@ -210,15 +210,17 @@ impl ProgressService {
         Ok(())
     }
 
-    /// 无子目标任务增量汇报 +percent%（5–100 的 5 倍数），累计不超 100%。
-    /// 落 + 分钟账，到 100% 自动完成。返回任务最新状态。
+    /// 无子目标任务增量汇报 +percent%（任意正数，最小 0.1%、最多一位小数，
+    /// 上限 100%；2026-08-24 验收修订：原"5% 整数倍"颗粒度砍掉——庞大而简单的
+    /// 任务需要细粒度推进）。累计不超 100%，落 + 分钟账，到 100% 自动完成。
+    /// 返回任务最新状态。
     pub fn report_percent(
         conn: &Connection,
         clock: &dyn Clock,
         task_id: i64,
-        percent: u32,
+        percent: f64,
     ) -> Result<TaskStatus, PlanError> {
-        if percent % 5 != 0 || !(5..=100).contains(&percent) {
+        if !valid_percent(percent, 0.1) {
             return Err(PlanError::PercentInvalid);
         }
         let ctx = load_task_context(conn, task_id)?;
@@ -237,16 +239,17 @@ impl ProgressService {
         Ok(status)
     }
 
-    /// 修正总进度（任务详情"改口"通道）：直接设定当前值（0–100 的 5 倍数），
-    /// 差额以一条事件落账（可正可负）。仅无子目标任务；已完成任务锁定。
+    /// 修正总进度（任务详情"改口"通道）：直接设定当前值（任意正数 0–100、最多
+    /// 一位小数——2026-08-24 验收修订，同汇报颗粒度放开），差额以一条事件落账
+    /// （可正可负）。仅无子目标任务；已完成任务锁定。
     /// 不设计划状态门槛——修正是对历史的对账，暂停计划的进度同样可纠偏。
     pub fn correct_total(
         conn: &Connection,
         clock: &dyn Clock,
         task_id: i64,
-        percent: u32,
+        percent: f64,
     ) -> Result<TaskStatus, PlanError> {
-        if percent % 5 != 0 || percent > 100 {
+        if !valid_percent(percent, 0.0) {
             return Err(PlanError::PercentInvalid);
         }
         let ctx = load_task_context(conn, task_id)?;
@@ -254,13 +257,14 @@ impl ProgressService {
         if ctx.status == TaskStatus::Completed {
             return Err(PlanError::ProgressLocked);
         }
-        let target_value = percent as f64 * ctx.total_minutes as f64 / 100.0;
+        let target_value = round_delta_minutes(percent * ctx.total_minutes as f64 / 100.0);
         let current = PlanService::task_progress(conn, task_id)?.completed_minutes;
         let now = clock.now().to_rfc3339();
         let tx = conn.unchecked_transaction().map_err(db_err)?;
-        append_log(&tx, task_id, &now, target_value - current, ProgressSource::Correction)?;
+        // 差额也走边界 round：target 与 current 都是 f64，差额浮点尾巴同源污染。
+        append_log(&tx, task_id, &now, round_delta_minutes(target_value - current), ProgressSource::Correction)?;
         // 归零修正不产生"首次推进"语义，未开始任务保持未开始
-        let status = if percent > 0 {
+        let status = if percent > 0.0 {
             settle_task(&tx, task_id, ctx.status)?
         } else {
             ctx.status
@@ -310,6 +314,9 @@ impl ProgressService {
             return Ok(None); // 计划暂停/放弃或已移出今日列表：回空态
         }
         let progress = PlanService::task_progress(conn, id)?;
+        // 边界 round：UI 展示不暴露浮点尾巴（“4.3100000000000005 / 10h”），percent 一位
+        // 小数与 ProgressGranularity 对齐，completed_minutes round 到 1e-9 消多次累加残留；
+        // 领域 `TaskProgress::percent()` 仍保持原始精度供“分子不变分母变”语义使用。
         Ok(Some(CurrentTaskView {
             task_id: id,
             plan_id,
@@ -317,8 +324,8 @@ impl ProgressService {
             task_name: name,
             status,
             has_subgoals,
-            percent: progress.percent(),
-            completed_minutes: progress.completed_minutes,
+            percent: round_to_one_decimal(progress.percent()),
+            completed_minutes: round_delta_minutes(progress.completed_minutes),
             total_minutes: progress.total_minutes,
             subgoals: if has_subgoals { load_subgoals(conn, id)? } else { Vec::new() },
         }))
@@ -452,6 +459,28 @@ fn check_percent_task(ctx: &TaskContext) -> Result<(), PlanError> {
         return Err(PlanError::NotPercentTask);
     }
     Ok(())
+}
+
+/// 百分比数值合法性（CONTEXT ProgressGranularity，2026-08-24 验收修订）：
+/// ≥ min（汇报 0.1、修正 0）、≤ 100、最多一位小数（×10 后为整数的容差判定）。
+fn valid_percent(p: f64, min: f64) -> bool {
+    p >= min && p <= 100.0 && ((p * 10.0) - (p * 10.0).round()).abs() < 1e-9
+}
+
+/// delta 分钟边界 round：消 IEEE 754 浮点尾巴（percent × total / 100 不可精确表示），
+/// round 到 1e-9（f64 安全精度），防止多次 0.1% 累加污染 ProgressLog 求和与 UI 展示。
+/// 复用点：`report_percent` / `correct_total` 写日志前、CurrentTaskView.completed_minutes 装配；
+/// 测试 seam_progress::progress_percent_rounds_to_one_decimal。
+fn round_delta_minutes(v: f64) -> f64 {
+    (v * 1e9).round() / 1e9
+}
+
+/// 派生百分比边界 round：四舍五入到一位小数（与 CONTEXT ProgressGranularity 0.1% 颗粒度对齐），
+/// 消 IEEE 754 浮点尾巴暴露到 UI（如 “43.0999999...”）；领域 `TaskProgress::percent()`
+/// 仍保持原始精度供“分子不变分母变”语义使用，本函数仅作用于跨边界输出。
+/// 复用点：CurrentTaskView.percent 装配；测试 seam_progress::progress_percent_rounds_to_one_decimal。
+fn round_to_one_decimal(v: f64) -> f64 {
+    (v * 10.0).round() / 10.0
 }
 
 /// 汇报落账后的收尾：首次推进把未开始转进行中，再按派生进度自动完成（幂等）。

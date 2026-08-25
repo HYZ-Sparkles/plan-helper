@@ -161,12 +161,12 @@ pub fn undo_subgoal(
     ProgressService::undo_subgoal(&conn, state.clock.as_ref(), subgoal_id)
 }
 
-/// 无子目标任务增量汇报 +percent%（5–100 的 5 倍数，累计不超 100%）。
+/// 无子目标任务增量汇报 +percent%（任意正数，最小 0.1%、最多一位小数，累计不超 100%）。
 #[tauri::command]
 pub fn report_percent(
     state: State<'_, AppState>,
     task_id: i64,
-    percent: u32,
+    percent: f64,
 ) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     ProgressService::report_percent(&conn, state.clock.as_ref(), task_id, percent).map(|_| ())
@@ -177,7 +177,7 @@ pub fn report_percent(
 pub fn correct_total_progress(
     state: State<'_, AppState>,
     task_id: i64,
-    percent: u32,
+    percent: f64,
 ) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     ProgressService::correct_total(&conn, state.clock.as_ref(), task_id, percent).map(|_| ())

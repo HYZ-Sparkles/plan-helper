@@ -83,7 +83,7 @@
           <span class="task-name">{{ current.task_name }}</span>
           <!-- 百分比 + 耗时口径并列（ADR-0002：展示不跳过耗时映射） -->
           <span class="task-percent">
-            {{ Math.round(current.percent) }}%
+            {{ current.percent }}%
             <span class="percent-hours">
               {{ hoursFromMinutes(current.completed_minutes) }}/{{ hoursFromMinutes(current.total_minutes) }}h
             </span>
@@ -91,37 +91,45 @@
         </div>
         <MicroBar class="task-bar" :ratio="current.percent / 100" :reached="current.percent >= 100" />
 
-        <!-- 有子目标：已完成行可点撤销（SubGoalUndo），当前待完成行点亮可勾 -->
-        <ul v-if="current.has_subgoals" class="subgoals">
-          <li v-for="s in completedSubgoals" :key="s.id">
-            <button
-              type="button"
-              class="sg-row done"
-              title="撤销这个子目标的完成"
-              :disabled="busy"
-              @click="undo(s)"
-            >
-              <PhCheckCircle :size="15" class="sg-icon done" />
-              <span class="sg-name">{{ s.name }}</span>
-              <span class="sg-min">{{ s.estimated_minutes }}m</span>
-            </button>
-          </li>
-          <li v-if="pendingSubgoal">
-            <button
-              type="button"
-              class="sg-row current"
-              :disabled="busy"
-              @click="complete(pendingSubgoal.id)"
-            >
-              <PhCircle :size="15" class="sg-icon" />
-              <span class="sg-name">{{ pendingSubgoal.name }}</span>
-              <span class="sg-min">{{ pendingSubgoal.estimated_minutes }}m</span>
-            </button>
-          </li>
-        </ul>
-        <p v-if="remainingCount > 0" class="hint remaining">
-          还有 {{ remainingCount }} 项待推进
-        </p>
+        <!-- 有子目标：更早的已完成项折叠为计数行，只展开最近一行（可撤销——撤销本来就
+             只能从最后一项开始）；列表高度有界，不出现滚动条 -->
+        <!-- 有子目标：<template v-if> 把 <ul> + “还有 N 项”一起包起来，保持 v-if/v-else
+             与下面 percent-area 的完整分支语义（有子目标 / 无子目标）；若直接写
+             “<ul v-if=has_subgoals> + <p v-if=remainingCount> + <div v-else>” 会让 v-else
+             绑到 remainingCount 上、有子目标但只剩一项时仍误显 percent-area 推进框 -->
+        <template v-if="current.has_subgoals">
+          <ul class="subgoals">
+            <li v-if="olderCompletedCount > 0" class="sg-fold">已完成 {{ olderCompletedCount }} 项</li>
+            <li v-if="lastCompleted">
+              <button
+                type="button"
+                class="sg-row done"
+                title="撤销这个子目标的完成"
+                :disabled="busy"
+                @click="undoLast"
+              >
+                <PhCheckCircle :size="15" class="sg-icon done" />
+                <span class="sg-name">{{ lastCompleted.name }}</span>
+                <span class="sg-min">{{ lastCompleted.estimated_minutes }}m</span>
+              </button>
+            </li>
+            <li v-if="pendingSubgoal">
+              <button
+                type="button"
+                class="sg-row current"
+                :disabled="busy"
+                @click="complete(pendingSubgoal.id)"
+              >
+                <PhCircle :size="15" class="sg-icon" />
+                <span class="sg-name">{{ pendingSubgoal.name }}</span>
+                <span class="sg-min">{{ pendingSubgoal.estimated_minutes }}m</span>
+              </button>
+            </li>
+          </ul>
+          <p v-if="remainingCount > 0" class="hint remaining">
+            还有 {{ remainingCount }} 项待推进
+          </p>
+        </template>
 
         <!-- 无子目标：PercentAdjustControl（[-] -10% / 点数字直填 5% 倍数 / [+] +10%）+ 增量推进 -->
         <div v-else class="percent-area">
@@ -130,7 +138,7 @@
             <button
               type="button"
               class="icon-btn"
-              title="-10%（最低 5%）"
+              title="-10%（最低 0.1%）"
               :disabled="busy"
               @click="step = clampStep(step - 10)"
             >
@@ -142,9 +150,9 @@
               v-model="stepDraft"
               class="input step-input"
               type="number"
-              min="5"
+              min="0.1"
               max="100"
-              step="5"
+              step="0.1"
               @keyup.enter="commitStep"
               @keyup.esc="editingStep = false"
               @blur="commitStep"
@@ -224,10 +232,9 @@ import {
   setCurrentTask,
   undoSubgoal,
   type MiniBoardView,
-  type SubGoalView,
 } from "../lib/api";
 import { hoursFromMinutes, hoursLabel, planErrorMessage } from "../lib/labels";
-import { isValidPercentStep } from "../lib/validation";
+import { isValidPercentValue } from "../lib/validation";
 
 const win = getCurrentWebviewWindow();
 const view = ref<MiniBoardView | null>(null);
@@ -251,10 +258,17 @@ const current = computed(() => view.value?.current ?? null);
 const todayMinutes = computed(() => view.value?.today_minutes ?? 0);
 const targetMinutes = computed(() => view.value?.target_minutes ?? 0);
 
-/** 已完成子目标（展示为可撤销行） */
+/** 已完成子目标（折叠展示的数据源：只展开最近一行） */
 const completedSubgoals = computed(() =>
   current.value?.subgoals.filter((s) => s.completed) ?? [],
 );
+/** 更早的已完成项折叠成计数行（面板高度有界、无滚动条；撤销也只对最后一行有意义） */
+const olderCompletedCount = computed(() => Math.max(0, completedSubgoals.value.length - 1));
+/** 最近一个已完成子目标 = 唯一可撤销项（服务层只允许从末尾撤销） */
+const lastCompleted = computed(() => {
+  const done = completedSubgoals.value;
+  return done.length > 0 ? done[done.length - 1] : null;
+});
 /** 当前待完成子目标 = 第一个未完成（按序推进的唯一入口） */
 const pendingSubgoal = computed(
   () => current.value?.subgoals.find((s) => !s.completed) ?? null,
@@ -306,8 +320,10 @@ async function act(action: () => Promise<void>, note?: string) {
 
 const complete = (id: number) => act(() => completeSubgoal(id));
 
-function undo(s: SubGoalView) {
-  act(() => undoSubgoal(s.id), `已撤销「${s.name}」的完成，进度已重算`);
+/** 撤销最近一个已完成子目标（toast 提示进度已重算） */
+function undoLast() {
+  const s = lastCompleted.value;
+  if (s) act(() => undoSubgoal(s.id), `已撤销「${s.name}」的完成，进度已重算`);
 }
 
 const report = () => act(() => reportPercent(current.value!.task_id, step.value));
@@ -320,22 +336,22 @@ async function pick(taskId: number) {
   });
 }
 
-/** PercentAdjustControl 钳制（CONTEXT）：[-] 最低 5%、[+] 最高 100% */
-const clampStep = (v: number) => Math.min(100, Math.max(5, v));
+/** PercentAdjustControl 钳制（CONTEXT，2026-08-24 修订）：[-] 最低 0.1%、[+] 最高 100% */
+const clampStep = (v: number) => Math.min(100, Math.max(0.1, v));
 
-/** 点数字直填：进入编辑态并聚焦选中（5–100 的 5 倍数，非法回退原档位） */
+/** 点数字直填：进入编辑态并聚焦选中（任意正数 0.1–100、最多一位小数，非法回退原档位） */
 function startEditStep() {
   stepDraft.value = String(step.value);
   editingStep.value = true;
   nextTick(() => stepInput.value?.select());
 }
 
-/** 直填提交：合法档位生效，非法（非整数 / 非 5 倍数 / 越界）静默回退 */
+/** 直填提交：合法档位生效，非法（非正数 / 两位小数 / 越界）静默回退 */
 function commitStep() {
   if (!editingStep.value) return;
   editingStep.value = false;
   const v = Number(stepDraft.value);
-  if (isValidPercentStep(v, 5)) step.value = v;
+  if (isValidPercentValue(v, 0.1)) step.value = v;
 }
 
 onMounted(async () => {
@@ -363,6 +379,8 @@ onMounted(async () => {
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg); /* 桌面浮层 */
   box-sizing: border-box;
+  /* 容器内兜底裁切（外层 tokens.css body.transparent-root 已 overflow:hidden 切断 webview 滚动条） */
+  overflow: hidden;
 }
 
 /* ---- 头部 ---- */
@@ -440,7 +458,7 @@ onMounted(async () => {
   margin: 8px 0 10px;
 }
 
-/* ---- 子目标：已完成行（可撤销）与当前待完成行 ---- */
+/* ---- 子目标：折叠计数行 + 最近已完成（可撤销）+ 当前待完成 ---- */
 .subgoals {
   margin: 0;
   padding: 0;
@@ -448,8 +466,14 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  overflow-y: auto;
-  min-height: 0;
+}
+
+/* 更早已完成项的折叠计数（2026-08-24 验收修订：去滚动条、面板高度有界） */
+.sg-fold {
+  margin: 0;
+  padding: 2px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .sg-row {
@@ -587,7 +611,8 @@ onMounted(async () => {
 .picker {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
+  /* 外层 .board-card 已 overflow:hidden 切断 webview 滚动条；此处一并去掉内部滚轮，避免视觉/交互残留 */
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;

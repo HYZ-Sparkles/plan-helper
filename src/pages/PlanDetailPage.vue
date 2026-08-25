@@ -217,7 +217,7 @@
       @cancel="correcting = null"
     >
       <p>
-        任务「{{ correcting.name }}」当前 {{ Math.round(correcting.progress_percent) }}%，
+        任务「{{ correcting.name }}」当前 {{ correcting.progress_percent }}%，
         直接设定为
         <input
           v-model="correctValue"
@@ -225,10 +225,10 @@
           type="number"
           min="0"
           max="100"
-          step="5"
+          step="0.1"
           @keyup.enter="applyCorrection"
         />
-        %（0–100 的 5 倍数）
+        %（0–100，最多一位小数）
       </p>
       <p v-if="correctError" class="correct-error">{{ correctError }}</p>
       <p class="hint">修正以事件落账，今日统计随之重算。</p>
@@ -270,7 +270,7 @@ import {
 } from "../lib/api";
 import { hoursFromMinutes, pauseReasonLabel, planErrorMessage } from "../lib/labels";
 import { taskProgress, taskProgressLabel } from "../lib/progress";
-import { isValidPercentStep } from "../lib/validation";
+import { isValidPercentValue } from "../lib/validation";
 
 const route = useRoute();
 const router = useRouter();
@@ -379,18 +379,19 @@ async function copyAsNew() {
   await router.push(`/control-panel/plans/${newId}`);
 }
 
-/** 打开修正总进度弹窗：输入初值 = 当前进度（就近取 5 倍数） */
+/** 打开修正总进度弹窗：输入初值 = 当前进度（就近取一位小数） */
 function openCorrection(t: TaskView) {
   correcting.value = t;
-  correctValue.value = String(Math.round(t.progress_percent / 5) * 5);
+  correctValue.value = String(Math.round(t.progress_percent * 10) / 10);
   correctError.value = "";
 }
 
-/** 修正总进度：本地校验 0–100 的 5 倍数（与服务端同一颗粒度），服务层权威落账（差额以事件记账） */
+/** 修正总进度：本地校验 0–100 任意正数（最多一位小数，2026-08-24 修订），
+ *  服务层权威落账（差额以事件记账） */
 async function applyCorrection() {
   const v = Number(correctValue.value);
-  if (!isValidPercentStep(v, 0)) {
-    correctError.value = "请填 0–100 内 5 的倍数";
+  if (!isValidPercentValue(v, 0)) {
+    correctError.value = "请填 0–100 的数值（最多一位小数）";
     return;
   }
   correctError.value = "";
