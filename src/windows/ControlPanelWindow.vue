@@ -22,7 +22,19 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted } from "vue";
 import { PhGear, PhListBullets, PhPlus } from "@phosphor-icons/vue";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+
+onMounted(async () => {
+  // 关闭 = 隐藏，不退出应用（spec 68；工单 08 起启动隐藏、桌宠菜单为主要入口，
+  // 点 X 真销毁窗口的话入口就失效了——同 mini-board/main-board 的拦截模式）
+  const win = getCurrentWebviewWindow();
+  await win.onCloseRequested(async (e) => {
+    e.preventDefault();
+    await win.hide();
+  });
+});
 </script>
 
 <style scoped>

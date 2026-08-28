@@ -29,6 +29,18 @@ export function getAppState(): Promise<AppStateView> {
   return invoke<AppStateView>("get_app_state");
 }
 
+/* ---- 桌宠（工单 08）---- */
+
+/** AutoOpenMainBoard 判定（06 预留、08 接线：启动序列完成后 / 手动切入工作模式时检测） */
+export function shouldAutoOpenMainBoard(workMode: boolean): Promise<boolean> {
+  return invoke<boolean>("should_auto_open_main_board", { workMode });
+}
+
+/** 再见：跳箱动画播完后退出整个应用（关闭全部窗口；托盘退出（工单 14）走同一通道） */
+export function exitApp(): Promise<void> {
+  return invoke("exit_app");
+}
+
 /* ---- 计划领域（工单 02+）---- */
 
 /** 优先级枚举（CONTEXT「优先级」） */

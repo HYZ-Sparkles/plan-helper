@@ -58,7 +58,9 @@ pub fn run() {
             commands::complete_subgoal,
             commands::undo_subgoal,
             commands::report_percent,
-            commands::correct_total_progress
+            commands::correct_total_progress,
+            commands::should_auto_open_main_board,
+            commands::exit_app
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -69,7 +71,10 @@ pub fn run() {
 /// （2026-08-24 验收要求：小看板在桌宠下方且不出屏）。拖拽跟随/记忆位置由工单 09
 /// 接管，模式显隐由工单 08 接管。
 fn position_pet_and_board(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
-    let (pet, mini) = (app.get_webview_window("pet"), app.get_webview_window("mini-board"));
+    let (pet, mini) = (
+        app.get_webview_window("pet"),
+        app.get_webview_window("mini-board"),
+    );
     let monitor = pet
         .as_ref()
         .and_then(|w| w.current_monitor().ok().flatten())

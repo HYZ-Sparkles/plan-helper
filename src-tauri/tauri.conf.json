@@ -24,6 +24,20 @@
         "shadow": false
       },
       {
+        "label": "pet-menu",
+        "title": "桌宠菜单",
+        "width": 168,
+        "height": 152,
+        "decorations": false,
+        "transparent": true,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "shadow": false,
+        "visible": false,
+        "focus": false
+      },
+      {
         "label": "mini-board",
         "title": "小看板",
         "width": 240,
@@ -51,7 +65,8 @@
         "height": 720,
         "minWidth": 880,
         "minHeight": 600,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "visible": false
       }
     ],
     "security": {

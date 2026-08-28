@@ -19,10 +19,7 @@ pub fn get_app_state(state: State<'_, AppState>) -> Result<AppStateView, String>
 
 /// 创建计划（含任务），返回新计划 id；校验失败以 PlanError 结构化返回。
 #[tauri::command]
-pub fn create_plan(
-    state: State<'_, AppState>,
-    new: PlanDraft,
-) -> Result<i64, PlanError> {
+pub fn create_plan(state: State<'_, AppState>, new: PlanDraft) -> Result<i64, PlanError> {
     let conn = state.db.lock().unwrap();
     PlanService::create(&conn, state.clock.as_ref(), &new)
 }
@@ -133,30 +130,21 @@ pub fn get_mini_board(state: State<'_, AppState>) -> Result<MiniBoardView, PlanE
 
 /// 指定当前任务（须在今日推进列表内且可推进）。
 #[tauri::command]
-pub fn set_current_task(
-    state: State<'_, AppState>,
-    task_id: i64,
-) -> Result<(), PlanError> {
+pub fn set_current_task(state: State<'_, AppState>, task_id: i64) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     ProgressService::set_current_task(&conn, state.clock.as_ref(), task_id)
 }
 
 /// 按序完成一个子目标（乱序拒绝；到 100% 自动完成）。
 #[tauri::command]
-pub fn complete_subgoal(
-    state: State<'_, AppState>,
-    subgoal_id: i64,
-) -> Result<(), PlanError> {
+pub fn complete_subgoal(state: State<'_, AppState>, subgoal_id: i64) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     ProgressService::complete_subgoal(&conn, state.clock.as_ref(), subgoal_id).map(|_| ())
 }
 
 /// 撤销最后一个已完成的子目标（补偿账，进度实时重算）。
 #[tauri::command]
-pub fn undo_subgoal(
-    state: State<'_, AppState>,
-    subgoal_id: i64,
-) -> Result<(), PlanError> {
+pub fn undo_subgoal(state: State<'_, AppState>, subgoal_id: i64) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     ProgressService::undo_subgoal(&conn, state.clock.as_ref(), subgoal_id)
 }
@@ -181,4 +169,22 @@ pub fn correct_total_progress(
 ) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     ProgressService::correct_total(&conn, state.clock.as_ref(), task_id, percent).map(|_| ())
+}
+
+/* ---- 桌宠（工单 08）：薄代理，窗口/流程接线，无领域逻辑 ---- */
+
+/// AutoOpenMainBoard 判定（06 预留的触发接线：启动序列完成后 / 手动切入工作模式时检测）。
+#[tauri::command]
+pub fn should_auto_open_main_board(
+    state: State<'_, AppState>,
+    work_mode: bool,
+) -> Result<bool, PlanError> {
+    let conn = state.db.lock().unwrap();
+    AllocationService::should_auto_open(&conn, state.clock.as_ref(), work_mode)
+}
+
+/// 再见：跳箱动画播完后退出整个应用（关闭全部窗口；托盘退出（工单 14）走同一通道）。
+#[tauri::command]
+pub fn exit_app(app: tauri::AppHandle) {
+    app.exit(0);
 }

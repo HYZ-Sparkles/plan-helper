@@ -81,6 +81,7 @@
 - 工单 05 生命周期：`start_plan` / `pause_plan` / `resume_plan` / `complete_plan` / `abort_plan` / `copy_plan_as_new(->新计划id)` — 前端 `src/lib/api.ts` 同名包装；状态机与校验全在 domain::lifecycle（原 `set_plan_order` 已随手动排序砍掉移除，2026-08-24）
 - 工单 06 今日分配：`get_allocation_board(-> AllocationBoardView)` / `commit_today_allocation(task_ids)` — 前端 `src/lib/api.ts` 同名包装；装配与校验全在 domain::allocation
 - 工单 07 进度汇报：`get_mini_board(-> MiniBoardView)` / `set_current_task(task_id)` / `complete_subgoal(subgoal_id)` / `undo_subgoal(subgoal_id)` / `report_percent(task_id, percent)` / `correct_total_progress(task_id, percent)` — 前端 `src/lib/api.ts` 同名包装；账本与派生全在 domain::progress；`lib.rs` 启动时已有有效当前任务则显示小看板、`position_pet_and_board` 把「桌宠+小看板」组合体锚到工作区右下角（小看板在桌宠**下方**、右对齐 40px 边距，桌宠居其上方水平居中——2026-08-24 验收要求；拖拽跟随归 09、模式显隐归 08）
+- 工单 08 桌宠：`should_auto_open_main_board(work_mode) -> bool` — AutoOpenMainBoard 判定的触发接线（06 预留；启动序列完成后 / 手动切入工作模式时由桌宠窗口调用）；`exit_app()` — 再见/托盘退出的统一通道（跳箱动画播完后由前端调用，`app.exit(0)` 关闭全部窗口）。窗口配置新增 `pet-menu`（无边框透明置顶小窗，桌宠菜单）；`control-panel` 改为启动隐藏（spec「启动序列播完直接上桌面」，入口 = 桌宠菜单/托盘）；capabilities 补 `core:window:allow-current-monitor` / `allow-scale-factor`（菜单定位与 mover 缓存用）
 
 ## 测试先例（tests/）
 
