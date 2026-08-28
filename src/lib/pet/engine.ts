@@ -7,7 +7,7 @@
  * 模式站/坐轮换、09 的随机动作）仅从空闲发起，可被用户动作立即抢占（装饰性动作让路）。
  * README「先播放完才执行新动作」由锁 + 抢占边界共同保障。
  */
-import { ANIMATIONS } from "./animations";
+import { ANIMATIONS, type AnimationDef } from "./animations";
 
 /** 窗口位移抽象：一律物理像素（与 Tauri outerPosition / currentMonitor.workArea 同口径） */
 export interface PetMover {
@@ -59,6 +59,8 @@ export interface EngineState {
 interface ResolvedMove {
   startX: number;
   dx: number;
+  /** moveWeights 前缀和（长 = 帧数 + 1，末项 = Σw）；null = 未配权重 → 时间线性 */
+  cumW: number[] | null;
 }
 
 export class PetEngine {
@@ -168,7 +170,28 @@ export class PetEngine {
     }
     const target = Math.min(Math.max(pos.x + (dir === "right" ? dist : -dist), minX), maxX);
     const dx = target - pos.x;
-    return dx === 0 ? null : { startX: pos.x, dx };
+    if (dx === 0) return null;
+    // 权重前缀和（含全 0 防退化：Σw ≤ 0 视为未配置走线性，避免除零）
+    const w = ANIMATIONS[step.anim].moveWeights;
+    let cumW: number[] | null = null;
+    if (w) {
+      cumW = [0];
+      for (const v of w) cumW.push(cumW[cumW.length - 1] + v);
+      if (!(cumW[cumW.length - 1] > 0)) cumW = null;
+    }
+    return { startX: pos.x, dx, cumW };
+  }
+
+  /** 位移进度 [0,1]：未配权重 = 时间线性；配了 = 按"帧内时间 × 权重"分段采样，
+   *  第 i 帧期间走过的距离占比 = w[i]/Σw（Run 跨步快/收腿慢、Jump 蓄力缓/腾空疾靠它表达） */
+  private moveProgress(def: AnimationDef, fps: number): number {
+    const frameMs = 1000 / fps;
+    const ef = Math.min(this.stepElapsed / frameMs, def.frames.length); // 已过帧时间（含小数）
+    const w = this.move!.cumW;
+    if (!w) return ef / def.frames.length;
+    const i = Math.floor(ef);
+    if (i >= w.length - 1) return 1;
+    return (w[i] + (ef - i) * (w[i + 1] - w[i])) / w[w.length - 1];
   }
 
   private tick = (t: number): void => {
@@ -180,11 +203,10 @@ export class PetEngine {
     const step = action.steps[this.stepIdx];
     const def = ANIMATIONS[step.anim];
     const fps = step.fps ?? def.fps;
-    const duration = (def.frames.length / fps) * 1000;
 
     // 窗口位移按单调时长插值（比帧率平滑），最终钳制由 mover 兜底
     if (this.move && this.mover) {
-      const progress = Math.min(this.stepElapsed / duration, 1);
+      const progress = this.moveProgress(def, fps);
       this.mover.moveTo(this.move.startX + this.move.dx * progress, this.mover.position().y);
     }
 

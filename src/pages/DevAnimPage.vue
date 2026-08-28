@@ -9,14 +9,18 @@
  */
 import { computed, reactive, ref, watch } from "vue";
 import PetSprite from "../components/PetSprite.vue";
-import { ANIMATIONS } from "../lib/pet/animations";
+import { ANIMATIONS, type FrameRect } from "../lib/pet/animations";
 import { PetEngine, type EngineState, type PetMover, type StepSpec } from "../lib/pet/engine";
 import {
   PhArrowCounterClockwise,
+  PhArrowLeft,
+  PhArrowRight,
   PhCaretDown,
   PhCaretLeft,
   PhCaretRight,
   PhCaretUp,
+  PhMinus,
+  PhPlus,
 } from "@phosphor-icons/vue";
 
 /** 假想屏幕：480×220，64×64 的桌宠窗口可横向滑动 */
@@ -104,12 +108,27 @@ function stepFrame(delta: number) {
 const moveDistance = ref(200);
 const moveDir = ref<"auto" | "left" | "right">("auto");
 
-/* ---- 帧摆放微调（验收机制）：切分不动，只调某一帧的摆放 ---- */
+/* ---- 帧序 / 位移权重 / 摆放微调（验收机制）----
+ * 三张草稿都只在本页生效（同 fps 滑杆不持久化）；落盘 = 页底草稿粘进生成脚本对应表重跑。
+ * 帧序与权重直接改写 def（引擎每 tick 取 def，播放中立即可见）；微调走 nudge prop。 */
 
-/** 微调草稿：anim → (0-based 帧下标) → {ox, oy}（素材像素，正 = 右 / 下）；只在本页生效，落盘走生成脚本 NUDGE 表 */
+/** 摆放微调草稿：anim → (0-based 播放位) → {ox, oy}（素材像素，正 = 右 / 下） */
 const nudges = ref<Record<number, Record<number, { ox: number; oy: number }>>>({});
 
+/** 帧序草稿：anim → 播放顺序（元素 = 素材从左数第几帧，1-based）；缺省 = 素材原序 */
+const orders = ref<Record<number, number[]>>({});
+
+/** 权重草稿：anim → 素材帧号(1-based) → 位移权重（默认 1，按素材帧号存——换序时权重跟着帧走） */
+const weights = ref<Record<number, Record<number, number>>>({});
+
+/** 首次改动某动画时快照素材原始帧序（重排与复位的基准） */
+const origFrames = new Map<number, FrameRect[]>();
+
 const nudgeOf = (anim: number, frame: number) => nudges.value[anim]?.[frame];
+
+/** 当前播放位序列（元素 = 素材帧号 1-based）：平铺格即按此序排布 */
+const matSeqOf = (anim: number): number[] =>
+  orders.value[anim] ?? ANIMATIONS[anim].frames.map((_, i) => i + 1);
 
 function nudge(anim: number, frame: number, dx: number, dy: number) {
   const per = (nudges.value[anim] ??= {});
@@ -117,8 +136,74 @@ function nudge(anim: number, frame: number, dx: number, dy: number) {
   per[frame] = { ox: cur.ox + dx, oy: cur.oy + dy };
 }
 
-function clearNudge(anim: number, frame: number) {
-  if (nudges.value[anim]) delete nudges.value[anim][frame];
+/** 权重按当前播放序写入 def.moveWeights（引擎取步时读取；全默认不注入） */
+function applyWeights(anim: number) {
+  const per = weights.value[anim];
+  const arr = per && Object.keys(per).length ? matSeqOf(anim).map((m) => per[m] ?? 1) : null;
+  ANIMATIONS[anim].moveWeights = arr && arr.some((v) => v !== 1) ? arr : undefined;
+}
+
+/** 重排 def.frames（切分矩形不动只换序）并按新序重挂权重数组 */
+function applyOrder(anim: number) {
+  const orig = origFrames.get(anim)!;
+  ANIMATIONS[anim].frames = orders.value[anim].map((i) => orig[i - 1]);
+  applyWeights(anim);
+}
+
+function moveFrame(anim: number, pos: number, d: -1 | 1) {
+  const seq = [...matSeqOf(anim)];
+  const t = pos + d;
+  if (t < 0 || t >= seq.length) return;
+  if (!origFrames.has(anim)) origFrames.set(anim, [...ANIMATIONS[anim].frames]);
+  [seq[pos], seq[t]] = [seq[t], seq[pos]];
+  orders.value[anim] = seq;
+  applyOrder(anim);
+}
+
+function resetOrder(anim: number) {
+  const orig = origFrames.get(anim);
+  if (!orig) return;
+  ANIMATIONS[anim].frames = [...orig];
+  delete orders.value[anim];
+  applyWeights(anim);
+}
+
+const weightOf = (anim: number, mat: number) => weights.value[anim]?.[mat] ?? 1;
+
+function bumpWeight(anim: number, mat: number, d: number) {
+  const per = (weights.value[anim] ??= {});
+  const v = Math.max(0, (per[mat] ?? 1) + d);
+  if (v === 1) delete per[mat];
+  else per[mat] = v;
+  if (!Object.keys(per).length) delete weights.value[anim];
+  applyWeights(anim);
+}
+
+function resetWeights(anim: number) {
+  delete weights.value[anim];
+  applyWeights(anim);
+}
+
+/** 本帧恢复默认（摆放微调 + 权重；帧序是队列级操作，整条恢复用「恢复原序」） */
+function resetFrame(anim: number, pos: number, mat: number) {
+  if (nudges.value[anim]) delete nudges.value[anim][pos];
+  if (weights.value[anim]) {
+    delete weights.value[anim][mat];
+    if (!Object.keys(weights.value[anim]).length) delete weights.value[anim];
+  }
+  applyWeights(anim);
+}
+
+/** 清空草稿并还原本页对 ANIMATIONS 的一切临时改动 */
+function clearDraft() {
+  const anims = new Set([...origFrames.keys(), ...Object.keys(weights.value).map(Number)]);
+  for (const a of anims) {
+    if (origFrames.has(a)) ANIMATIONS[a].frames = [...origFrames.get(a)!];
+    ANIMATIONS[a].moveWeights = undefined;
+  }
+  orders.value = {};
+  weights.value = {};
+  nudges.value = {};
 }
 
 /** 微调读数文案（如 "x+1 y-2"，全 0 省略） */
@@ -126,21 +211,35 @@ const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`);
 const nudgeLabel = (n?: { ox: number; oy: number }) =>
   !n || (!n.ox && !n.oy) ? "" : `x${signed(n.ox)} y${signed(n.oy)}`;
 
-/** 草稿 → 可直接粘进 scripts/gen-pet-frames.mjs NUDGE 表的片段（帧号 1-based，同平铺显示） */
-const nudgeSnippet = computed(() => {
-  const lines: string[] = [];
+/** 草稿 → 可直接粘进 scripts/gen-pet-frames.mjs 的片段（帧号/位次 1-based，同平铺显示） */
+const draftSnippet = computed(() => {
+  const orderLines: string[] = [];
+  for (const [a, seq] of Object.entries(orders.value))
+    if (seq.some((m, i) => m !== i + 1)) orderLines.push(`  ${a}: [${seq.join(", ")}],`);
+  const weightLines: string[] = [];
+  for (const [a, per] of Object.entries(weights.value)) {
+    const arr = matSeqOf(+a).map((m) => per[m] ?? 1);
+    if (arr.some((v) => v !== 1)) weightLines.push(`  ${a}: [${arr.join(", ")}],`);
+  }
+  const nudgeLines: string[] = [];
   for (const [a, per] of Object.entries(nudges.value)) {
     const frames = Object.entries(per)
       .filter(([, v]) => v.ox || v.oy)
       .map(([f, v]) => `    ${Number(f) + 1}: [${v.ox}, ${v.oy}],`)
       .join("\n");
-    if (frames) lines.push(`  ${a}: {\n${frames}\n  },`);
+    if (frames) nudgeLines.push(`  ${a}: {\n${frames}\n  },`);
   }
-  return lines.length ? `const NUDGE = {\n${lines.join("\n")}\n};` : "";
+  return [
+    orderLines.length && `const FRAME_ORDER = {\n${orderLines.join("\n")}\n};`,
+    weightLines.length && `const MOVE_WEIGHTS = {\n${weightLines.join("\n")}\n};`,
+    nudgeLines.length && `const NUDGE = {\n${nudgeLines.join("\n")}\n};`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 });
 
 async function copySnippet() {
-  await navigator.clipboard.writeText(nudgeSnippet.value);
+  await navigator.clipboard.writeText(draftSnippet.value);
 }
 </script>
 
@@ -203,33 +302,46 @@ async function copySnippet() {
             <option value="right">right</option>
           </select>
           <button class="primary-btn" @click="play(true)">带位移播放</button>
+          <button v-if="orders[sel]" class="ghost-btn" @click="resetOrder(sel)">恢复原序</button>
+          <button v-if="weights[sel]" class="ghost-btn" @click="resetWeights(sel)">权重归一</button>
         </div>
 
-        <!-- 全帧平铺：切帧终审 + 逐帧摆放微调（步进按钮为素材像素，×2 显示；草稿页底导出） -->
+        <!-- 全帧平铺：切帧终审 + 逐帧调整（上排 ◁▷ 播放位 / −+ 位移权重，下排 ◀▲▼▶ 摆放微调；草稿页底导出） -->
         <div class="strip" :style="{ transform: `scale(${zoom})`, transformOrigin: 'top left' }">
-          <div v-for="(_, i) in def.frames" :key="i" class="strip-cell" :class="{ cur: view.frame === i }">
-            <PetSprite :anim="sel" :frame="i" :flip="flip" :nudge="nudgeOf(sel, i)" />
-            <div class="nudge-ctl" :title="`第 ${i + 1} 帧摆放微调（素材像素）`">
-              <button @click="nudge(sel, i, -1, 0)" title="左 1px"><PhCaretLeft :size="10" /></button>
-              <button @click="nudge(sel, i, 0, -1)" title="上 1px"><PhCaretUp :size="10" /></button>
-              <button @click="nudge(sel, i, 0, 1)" title="下 1px"><PhCaretDown :size="10" /></button>
-              <button @click="nudge(sel, i, 1, 0)" title="右 1px"><PhCaretRight :size="10" /></button>
-              <button v-if="nudgeLabel(nudgeOf(sel, i))" @click="clearNudge(sel, i)" title="清零">
+          <div v-for="(mat, pos) in matSeqOf(sel)" :key="mat" class="strip-cell" :class="{ cur: view.frame === pos }">
+            <PetSprite :anim="sel" :frame="pos" :flip="flip" :nudge="nudgeOf(sel, pos)" />
+            <div class="nudge-ctl" :title="`播放位 ${pos + 1}（素材第 ${mat} 帧）`">
+              <button :disabled="pos === 0" @click="moveFrame(sel, pos, -1)" title="播放位前移"><PhArrowLeft :size="10" /></button>
+              <button :disabled="pos === matSeqOf(sel).length - 1" @click="moveFrame(sel, pos, 1)" title="播放位后移"><PhArrowRight :size="10" /></button>
+              <button @click="bumpWeight(sel, mat, -0.5)" title="位移权重 -0.5（每帧行程占比，带位移播放生效）"><PhMinus :size="10" /></button>
+              <span class="w-readout" :class="{ set: weightOf(sel, mat) !== 1 }">{{ weightOf(sel, mat) }}</span>
+              <button @click="bumpWeight(sel, mat, 0.5)" title="位移权重 +0.5（每帧行程占比，带位移播放生效）"><PhPlus :size="10" /></button>
+            </div>
+            <div class="nudge-ctl" :title="`第 ${pos + 1} 帧摆放微调（素材像素）`">
+              <button @click="nudge(sel, pos, -1, 0)" title="左 1px"><PhCaretLeft :size="10" /></button>
+              <button @click="nudge(sel, pos, 0, -1)" title="上 1px"><PhCaretUp :size="10" /></button>
+              <button @click="nudge(sel, pos, 0, 1)" title="下 1px"><PhCaretDown :size="10" /></button>
+              <button @click="nudge(sel, pos, 1, 0)" title="右 1px"><PhCaretRight :size="10" /></button>
+              <button
+                v-if="nudgeLabel(nudgeOf(sel, pos)) || weightOf(sel, mat) !== 1"
+                @click="resetFrame(sel, pos, mat)"
+                title="本帧恢复默认（微调 + 权重）"
+              >
                 <PhArrowCounterClockwise :size="10" />
               </button>
             </div>
-            <span class="nudge-readout">{{ nudgeLabel(nudgeOf(sel, i)) || i + 1 }}</span>
+            <span class="nudge-readout">{{ nudgeLabel(nudgeOf(sel, pos)) || pos + 1 }}</span>
           </div>
         </div>
 
-        <!-- 微调草稿导出：粘进 scripts/gen-pet-frames.mjs 的 NUDGE 表并重跑生成即落盘 -->
-        <div v-if="nudgeSnippet" class="nudge-export">
+        <!-- 调整草稿导出：粘进 scripts/gen-pet-frames.mjs 对应表（FRAME_ORDER / MOVE_WEIGHTS / NUDGE）重跑生成即落盘 -->
+        <div v-if="draftSnippet" class="nudge-export">
           <div class="nudge-export-head">
-            <span>微调草稿（粘进 scripts/gen-pet-frames.mjs 的 NUDGE 表，重跑 <code>node scripts/gen-pet-frames.mjs</code> 生效）</span>
+            <span>调整草稿（粘进 scripts/gen-pet-frames.mjs 对应表，重跑 <code>node scripts/gen-pet-frames.mjs</code> 生效）</span>
             <button class="ghost-btn" @click="copySnippet">复制</button>
-            <button class="ghost-btn" @click="nudges = {}">清空草稿</button>
+            <button class="ghost-btn" @click="clearDraft">清空草稿</button>
           </div>
-          <pre>{{ nudgeSnippet }}</pre>
+          <pre>{{ draftSnippet }}</pre>
         </div>
       </section>
     </div>
@@ -425,9 +537,26 @@ async function copySnippet() {
   cursor: pointer;
 }
 
-.nudge-ctl button:hover {
-  border: var(--border-active);
+.nudge-ctl button:hover:not(:disabled) {
+  border-color: var(--border-active);
   color: var(--text-primary);
+}
+
+.nudge-ctl button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.w-readout {
+  min-width: 22px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 14px;
+  color: var(--text-muted);
+}
+
+.w-readout.set {
+  color: var(--primary);
 }
 
 .nudge-readout {

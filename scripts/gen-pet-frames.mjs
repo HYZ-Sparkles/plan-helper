@@ -57,6 +57,20 @@ const NUDGE = {
   // 例：12: { 3: [0, 1] }, // 12 Stealth 第 3 帧往下 1 素材像素
 };
 
+/** 帧序覆写（验收沟通机制）：动画编号 → 播放顺序（元素 = 素材从左数第几帧，1-based）。
+ *  素材排帧顺序 ≠ 播放顺序时在此重排（切分矩形不动，只换播放序）；缺省 = 素材从左到右。
+ *  在 /dev/anim 调试页平铺格 ◁▷ 拨好，把页面底部导出的草稿片段粘进来，重跑本脚本生效。 */
+const FRAME_ORDER = {
+  // 例：10: [3, 1, 2, 4], // 10 Run：素材第 3 帧先播
+};
+
+/** 每帧位移权重（验收沟通机制）：动画编号 → 与帧数等长数组（按播放顺序）。
+ *  运动类动作某帧该多走/少走时用：第 i 帧期间走过的距离占比 = w[i]/Σw；
+ *  缺省/未列 = 全 1（均匀，现状）。调试页逐帧 ± 步进拨好，草稿粘进来重跑生效。 */
+const MOVE_WEIGHTS = {
+  // 例：10: [0.5, 1, 1, 2], // 10 Run：起步半速、第 4 帧冲刺两倍
+};
+
 // ---- PNG 解析（无依赖：IHDR + IDAT inflate + unfilter） ----
 
 /** 解析 PNG 为 { width, height, rgba: Buffer }（仅支持 8bit RGBA，本资源即此格式） */
@@ -254,16 +268,31 @@ function crop(rgba, fullW, x0, y0, w, h) {
 
 // 生成 animations.ts
 const sheetUrl = "/pet/oreo-sheet.png";
+
+/** 应用帧序覆写：返回按 FRAME_ORDER 重排后的帧矩形序列（NUDGE/MOVE_WEIGHTS 的帧号都指重排后的播放位） */
+function applyOrder(n, frames) {
+  const order = FRAME_ORDER[n];
+  if (!order) return frames;
+  if (order.length !== frames.length)
+    throw new Error(`FRAME_ORDER[${n}] 长度 ${order.length} ≠ 切分帧数 ${frames.length}`);
+  return order.map((i) => frames[i - 1]);
+}
+
 const lines = rows.map((row) => {
   const [name, fps, loop] = META[row.n];
-  const frames = row.frames
+  const ordered = applyOrder(row.n, row.frames);
+  const frames = ordered
     .map((f, i) => {
-      const n = NUDGE[row.n]?.[i + 1]; // 帧号 1-based（同调试页显示）
+      const n = NUDGE[row.n]?.[i + 1]; // 帧号 1-based = 播放位（同调试页显示）
       const nudge = n ? `, ox: ${n[0]}, oy: ${n[1]}` : "";
       return `{ x: ${f.x}, y: ${row.y0}, w: ${f.w}, h: ${row.h}${nudge} }`;
     })
     .join(", ");
-  return `  ${row.n}: { name: ${JSON.stringify(name)}, fps: ${fps}, loop: ${loop}, frames: [${frames}] },`;
+  const w = MOVE_WEIGHTS[row.n];
+  if (w && w.length !== ordered.length)
+    throw new Error(`MOVE_WEIGHTS[${row.n}] 长度 ${w.length} ≠ 切分帧数 ${ordered.length}`);
+  const weights = w ? `, moveWeights: [${w.join(", ")}]` : "";
+  return `  ${row.n}: { name: ${JSON.stringify(name)}, fps: ${fps}, loop: ${loop}${weights}, frames: [${frames}] },`;
 });
 
 const ts = `/**
@@ -294,6 +323,9 @@ export interface AnimationDef {
   fps: number;
   /** 播完是否循环（idle 类为 true） */
   loop: boolean;
+  /** 每帧位移权重（按 frames 播放顺序）：第 i 帧期间走过的距离占比 = w[i]/Σw；缺省 = 均匀。
+   *  值来自生成脚本的 MOVE_WEIGHTS 表（运动类动画在 /dev/anim 调试页试出后写回） */
+  moveWeights?: number[];
   frames: FrameRect[];
 }
 

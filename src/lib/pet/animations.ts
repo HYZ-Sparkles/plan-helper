@@ -26,6 +26,9 @@ export interface AnimationDef {
   fps: number;
   /** 播完是否循环（idle 类为 true） */
   loop: boolean;
+  /** 每帧位移权重（按 frames 播放顺序）：第 i 帧期间走过的距离占比 = w[i]/Σw；缺省 = 均匀。
+   *  值来自生成脚本的 MOVE_WEIGHTS 表（运动类动画在 /dev/anim 调试页试出后写回） */
+  moveWeights?: number[];
   frames: FrameRect[];
 }
 
