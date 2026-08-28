@@ -11,6 +11,13 @@ import { computed, reactive, ref, watch } from "vue";
 import PetSprite from "../components/PetSprite.vue";
 import { ANIMATIONS } from "../lib/pet/animations";
 import { PetEngine, type EngineState, type PetMover, type StepSpec } from "../lib/pet/engine";
+import {
+  PhArrowCounterClockwise,
+  PhCaretDown,
+  PhCaretLeft,
+  PhCaretRight,
+  PhCaretUp,
+} from "@phosphor-icons/vue";
 
 /** 假想屏幕：480×220，64×64 的桌宠窗口可横向滑动 */
 const SIM_AREA = { width: 480, height: 220 };
@@ -96,6 +103,45 @@ function stepFrame(delta: number) {
 
 const moveDistance = ref(200);
 const moveDir = ref<"auto" | "left" | "right">("auto");
+
+/* ---- 帧摆放微调（验收机制）：切分不动，只调某一帧的摆放 ---- */
+
+/** 微调草稿：anim → (0-based 帧下标) → {ox, oy}（素材像素，正 = 右 / 下）；只在本页生效，落盘走生成脚本 NUDGE 表 */
+const nudges = ref<Record<number, Record<number, { ox: number; oy: number }>>>({});
+
+const nudgeOf = (anim: number, frame: number) => nudges.value[anim]?.[frame];
+
+function nudge(anim: number, frame: number, dx: number, dy: number) {
+  const per = (nudges.value[anim] ??= {});
+  const cur = per[frame] ?? { ox: 0, oy: 0 };
+  per[frame] = { ox: cur.ox + dx, oy: cur.oy + dy };
+}
+
+function clearNudge(anim: number, frame: number) {
+  if (nudges.value[anim]) delete nudges.value[anim][frame];
+}
+
+/** 微调读数文案（如 "x+1 y-2"，全 0 省略） */
+const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`);
+const nudgeLabel = (n?: { ox: number; oy: number }) =>
+  !n || (!n.ox && !n.oy) ? "" : `x${signed(n.ox)} y${signed(n.oy)}`;
+
+/** 草稿 → 可直接粘进 scripts/gen-pet-frames.mjs NUDGE 表的片段（帧号 1-based，同平铺显示） */
+const nudgeSnippet = computed(() => {
+  const lines: string[] = [];
+  for (const [a, per] of Object.entries(nudges.value)) {
+    const frames = Object.entries(per)
+      .filter(([, v]) => v.ox || v.oy)
+      .map(([f, v]) => `    ${Number(f) + 1}: [${v.ox}, ${v.oy}],`)
+      .join("\n");
+    if (frames) lines.push(`  ${a}: {\n${frames}\n  },`);
+  }
+  return lines.length ? `const NUDGE = {\n${lines.join("\n")}\n};` : "";
+});
+
+async function copySnippet() {
+  await navigator.clipboard.writeText(nudgeSnippet.value);
+}
 </script>
 
 <template>
@@ -124,14 +170,14 @@ const moveDir = ref<"auto" | "left" | "right">("auto");
         <div class="stage-wrap">
           <div class="stage" :style="{ transform: `scale(${zoom})`, transformOrigin: 'bottom center' }">
             <div class="ground" />
-            <PetSprite :anim="view.anim" :frame="view.frame" :flip="view.flip" />
+            <PetSprite :anim="view.anim" :frame="view.frame" :flip="view.flip" :nudge="nudgeOf(view.anim, view.frame)" />
           </div>
         </div>
 
         <!-- 位移预览：假想屏幕 + 64×64 窗口盒 -->
         <div class="sim" :style="{ width: SIM_AREA.width + 'px', height: SIM_AREA.height + 'px' }">
           <div class="sim-win" :style="{ transform: `translateX(${simPos.x - (SIM_AREA.width - SIM_WIN) / 2}px)` }">
-            <PetSprite :anim="view.anim" :frame="view.frame" :flip="view.flip" />
+            <PetSprite :anim="view.anim" :frame="view.frame" :flip="view.flip" :nudge="nudgeOf(view.anim, view.frame)" />
           </div>
           <span class="sim-label">模拟屏幕（位移方向/边界钳制预览）</span>
         </div>
@@ -159,12 +205,31 @@ const moveDir = ref<"auto" | "left" | "right">("auto");
           <button class="primary-btn" @click="play(true)">带位移播放</button>
         </div>
 
-        <!-- 全帧平铺：切帧终审（每帧独立渲染，残缺/粘连一眼可见） -->
+        <!-- 全帧平铺：切帧终审 + 逐帧摆放微调（步进按钮为素材像素，×2 显示；草稿页底导出） -->
         <div class="strip" :style="{ transform: `scale(${zoom})`, transformOrigin: 'top left' }">
           <div v-for="(_, i) in def.frames" :key="i" class="strip-cell" :class="{ cur: view.frame === i }">
-            <PetSprite :anim="sel" :frame="i" :flip="flip" />
-            <span>{{ i + 1 }}</span>
+            <PetSprite :anim="sel" :frame="i" :flip="flip" :nudge="nudgeOf(sel, i)" />
+            <div class="nudge-ctl" :title="`第 ${i + 1} 帧摆放微调（素材像素）`">
+              <button @click="nudge(sel, i, -1, 0)" title="左 1px"><PhCaretLeft :size="10" /></button>
+              <button @click="nudge(sel, i, 0, -1)" title="上 1px"><PhCaretUp :size="10" /></button>
+              <button @click="nudge(sel, i, 0, 1)" title="下 1px"><PhCaretDown :size="10" /></button>
+              <button @click="nudge(sel, i, 1, 0)" title="右 1px"><PhCaretRight :size="10" /></button>
+              <button v-if="nudgeLabel(nudgeOf(sel, i))" @click="clearNudge(sel, i)" title="清零">
+                <PhArrowCounterClockwise :size="10" />
+              </button>
+            </div>
+            <span class="nudge-readout">{{ nudgeLabel(nudgeOf(sel, i)) || i + 1 }}</span>
           </div>
+        </div>
+
+        <!-- 微调草稿导出：粘进 scripts/gen-pet-frames.mjs 的 NUDGE 表并重跑生成即落盘 -->
+        <div v-if="nudgeSnippet" class="nudge-export">
+          <div class="nudge-export-head">
+            <span>微调草稿（粘进 scripts/gen-pet-frames.mjs 的 NUDGE 表，重跑 <code>node scripts/gen-pet-frames.mjs</code> 生效）</span>
+            <button class="ghost-btn" @click="copySnippet">复制</button>
+            <button class="ghost-btn" @click="nudges = {}">清空草稿</button>
+          </div>
+          <pre>{{ nudgeSnippet }}</pre>
         </div>
       </section>
     </div>
@@ -340,5 +405,57 @@ const moveDir = ref<"auto" | "left" | "right">("auto");
 .strip-cell span {
   font-size: 11px;
   color: var(--text-muted);
+}
+
+.nudge-ctl {
+  display: flex;
+  gap: 2px;
+}
+
+.nudge-ctl button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 14px;
+  padding: 0;
+  border: var(--border-default);
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.nudge-ctl button:hover {
+  border: var(--border-active);
+  color: var(--text-primary);
+}
+
+.nudge-readout {
+  font-size: 10px;
+  color: var(--primary);
+  min-height: 12px;
+}
+
+.nudge-export {
+  margin-top: 12px;
+  border: var(--border-active);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: var(--bg-accent-group);
+}
+
+.nudge-export-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.nudge-export pre {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--text-primary);
+  overflow: auto;
 }
 </style>

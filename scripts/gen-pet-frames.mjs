@@ -21,34 +21,41 @@ const ROW_H = 32;
 
 /** 动画元数据：名称（作者标注）+ 默认 fps + 是否循环。fps 无资源依据，为合理默认值 */
 const META = {
-  1: ["Stand to Sit", 8, false],
-  2: ["Sit Idle", 5, true],
-  3: ["Sit to Stand", 8, false],
-  4: ["Stand to Sleep", 8, false],
-  5: ["Sleep Idle", 5, true],
-  6: ["Sleep to Stand", 8, false],
-  7: ["Stand Idle", 5, true],
+  1: ["Stand to Sit", 7, false],
+  2: ["Sit Idle", 4, true],
+  3: ["Sit to Stand", 7, false],
+  4: ["Stand to Sleep", 7, false],
+  5: ["Sleep Idle", 4, true],
+  6: ["Sleep to Stand", 7, false],
+  7: ["Stand Idle", 4, true],
   8: ["Eat", 6, false],
-  9: ["Walk", 8, false],
-  10: ["Run", 12, false],
-  11: ["Prepare Stealth", 8, false],
+  9: ["Walk", 7, false],
+  10: ["Run", 7, false],
+  11: ["Prepare Stealth", 7, false],
   12: ["Stealth", 5, true],
-  13: ["Cancel Stealth", 8, false],
-  14: ["Jump", 10, false],
-  15: ["Attack", 12, false],
-  16: ["Loop Attack", 12, true],
-  17: ["Jump in to the Box", 10, false],
-  18: ["Push Hand Up", 8, false],
-  19: ["Play Box", 8, false],
-  20: ["Push Hand Down", 8, false],
+  13: ["Cancel Stealth", 7, false],
+  14: ["Jump", 7, false],
+  15: ["Attack", 7, false],
+  16: ["Loop Attack", 7, true],
+  17: ["Jump in to the Box", 7, false],
+  18: ["Push Hand Up", 7, false],
+  19: ["Play Box", 7, false],
+  20: ["Push Hand Down", 7, false],
   21: ["Ear Up", 6, false],
   22: ["Scan", 6, false],
   23: ["Ear Down", 6, false],
-  24: ["Jump out of the Box", 10, false],
+  24: ["Jump out of the Box", 7, false],
 };
 
 /** 人工核对后的帧边界覆写（行号 → 每帧内容的 x 起止列表）；空 = 纯自动检测 */
 const FRAME_OVERRIDES = {};
+
+/** 帧摆放微调（验收沟通机制）：动画编号 → { 帧号(1-based，同调试页显示): [ox, oy] }。
+ *  单位素材像素（×2 显示后 1 = 屏幕 2px），正方向 ox=右、oy=下。只调摆放不动切分。
+ *  在 /dev/anim 调试页逐帧步进拨好，把页面底部导出的草稿片段粘进来，重跑本脚本生效。 */
+const NUDGE = {
+  // 例：12: { 3: [0, 1] }, // 12 Stealth 第 3 帧往下 1 素材像素
+};
 
 // ---- PNG 解析（无依赖：IHDR + IDAT inflate + unfilter） ----
 
@@ -250,7 +257,11 @@ const sheetUrl = "/pet/oreo-sheet.png";
 const lines = rows.map((row) => {
   const [name, fps, loop] = META[row.n];
   const frames = row.frames
-    .map((f) => `{ x: ${f.x}, y: ${row.y0}, w: ${f.w}, h: ${row.h} }`)
+    .map((f, i) => {
+      const n = NUDGE[row.n]?.[i + 1]; // 帧号 1-based（同调试页显示）
+      const nudge = n ? `, ox: ${n[0]}, oy: ${n[1]}` : "";
+      return `{ x: ${f.x}, y: ${row.y0}, w: ${f.w}, h: ${row.h}${nudge} }`;
+    })
     .join(", ");
   return `  ${row.n}: { name: ${JSON.stringify(name)}, fps: ${fps}, loop: ${loop}, frames: [${frames}] },`;
 });
@@ -271,6 +282,10 @@ export interface FrameRect {
   y: number;
   w: number;
   h: number;
+  /** 摆放微调（素材像素，正 = 右 / 下；×SHEET_SCALE 后生效）。切分不动只调摆放——
+   *  值来自生成脚本的 NUDGE 表（验收时在 /dev/anim 调试页试出后写回） */
+  ox?: number;
+  oy?: number;
 }
 
 export interface AnimationDef {

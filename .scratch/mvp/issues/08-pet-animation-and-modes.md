@@ -36,3 +36,10 @@
 - 复用修正：`openMainBoard` 复用 `openWindow`；`PetMode`/`MenuAction`/事件名常量收敛到 `src/lib/pet/menu.ts`（两窗口不再各写一份）；菜单项数据驱动渲染。
 - DevAnimPage 样式违规修正（rgba 硬编码 → `--surface`、2px 圆角移除）；Rust 侧 `cargo fmt` 归一。
 - 遗留判断题（记录不修）：/dev/anim 进生产包（有意保留作验收调参工具）；前端无测试基建（spec Testing Decisions 明确桌宠动画不在自动化范围，锁/位移用 Node 确定性回归脚本验证过）。
+
+**2026-08-28 补充：帧摆放微调机制（用户验收沟通需要）**
+
+- 切分与摆放大分层：切分矩形不动，帧级 `ox/oy`（素材像素，正 = 右/下，×2 显示）只调摆放。链路：生成脚本 `NUDGE` 表（帧号 1-based 同调试页显示）→ `animations.ts` 帧字段 → PetSprite 渲染平移（translate 在 scaleX 前，偏移为屏幕空间、翻转不镜像）。
+- 调试页平铺格加 ◀▲▼▶ 步进（↺ 清零、读数 `x+1 y-2`），底部导出可直接粘贴的 NUDGE 草稿片段（一键复制）——用户拨好粘给我（或自己粘进脚本 `node scripts/gen-pet-frames.mjs` 重跑）即落盘。
+- 用户已按首轮验收自行调整过 META 的 fps（idle 4 / 过渡 7 等），以现值为准。
+- 整体站高（地面线锚定层）与窗口位置问题不在此机制内——分层见 FUNC.md。
