@@ -13,10 +13,13 @@
   justify-content: center;
 }
 
-/* 占位方块：仅骨架期标示桌宠区域，帧动画接入后移除 */
+/* 占位方块：仅骨架期标示桌宠区域，帧动画接入后移除。
+   64 = 32 像素素材 × 2 倍显示，与窗口尺寸（tauri.conf.json pet 64×64）同一倍数约定；
+   接帧动画时保持整数倍 + image-rendering: pixelated，像素画才锐利 */
 .placeholder {
-  width: 120px;
-  height: 120px;
+  width: 64px;
+  height: 64px;
+  font-size: 10px;
   display: flex;
   align-items: center;
   justify-content: center;

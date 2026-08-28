@@ -14,8 +14,8 @@
       {
         "label": "pet",
         "title": "Oreo",
-        "width": 160,
-        "height": 160,
+        "width": 64,
+        "height": 64,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
@@ -26,8 +26,8 @@
       {
         "label": "mini-board",
         "title": "小看板",
-        "width": 320,
-        "height": 340,
+        "width": 240,
+        "height": 260,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,

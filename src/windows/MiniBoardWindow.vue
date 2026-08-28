@@ -25,28 +25,31 @@
       <p v-if="loadError" class="error">{{ loadError }}</p>
       <p v-else-if="!view" class="hint loading">加载中…</p>
 
-      <!-- 更换任务选择器：今日推进列表按计划分组，当前任务同计划排最前（服务端已排好） -->
+      <!-- 更换任务选择器：今日推进列表按计划分组，当前任务同计划排最前（服务端已排好）；
+           组列表独立滚动，标题与“返回”钉在卡内 -->
       <div v-else-if="picking" class="picker">
         <p class="picker-title">从今日推进里挑一个</p>
-        <p v-if="view.pickers.length === 0" class="hint">
-          今日推进列表里没有可换的任务——去大面板重新分配
-        </p>
-        <section v-for="g in view.pickers" :key="g.plan_id" class="picker-group">
-          <p class="group-name">{{ g.plan_name }}</p>
-          <button
-            v-for="t in g.tasks"
-            :key="t.id"
-            type="button"
-            class="picker-row"
-            :class="{ chosen: t.id === current?.task_id }"
-            :disabled="busy"
-            @click="pick(t.id)"
-          >
-            <PhCircle v-if="t.id !== current?.task_id" :size="13" class="dot" />
-            <PhCheckCircle v-else :size="13" class="dot done" />
-            <span class="picker-name">{{ t.name }}</span>
-          </button>
-        </section>
+        <div class="picker-list">
+          <p v-if="view.pickers.length === 0" class="hint">
+            今日推进列表里没有可换的任务——去大面板重新分配
+          </p>
+          <section v-for="g in view.pickers" :key="g.plan_id" class="picker-group">
+            <p class="group-name">{{ g.plan_name }}</p>
+            <button
+              v-for="t in g.tasks"
+              :key="t.id"
+              type="button"
+              class="picker-row"
+              :class="{ chosen: t.id === current?.task_id }"
+              :disabled="busy"
+              @click="pick(t.id)"
+            >
+              <PhCircle v-if="t.id !== current?.task_id" :size="13" class="dot" />
+              <PhCheckCircle v-else :size="13" class="dot done" />
+              <span class="picker-name">{{ t.name }}</span>
+            </button>
+          </section>
+        </div>
         <button
           v-if="current"
           type="button"
@@ -373,7 +376,8 @@ onMounted(async () => {
   flex-direction: column;
   height: calc(100% - 16px);
   margin: 8px;
-  padding: 14px 16px 12px;
+  /* 窗口缩至 240×260 后的紧凑档：横向留白收窄，保内容区可用宽度 */
+  padding: 10px 12px 10px;
   background: var(--surface);
   border: var(--border-default);
   border-radius: var(--radius-lg);
@@ -388,7 +392,7 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .plan {
@@ -455,7 +459,7 @@ onMounted(async () => {
 }
 
 .task-bar {
-  margin: 8px 0 10px;
+  margin: 6px 0 8px;
 }
 
 /* ---- 子目标：折叠计数行 + 最近已完成（可撤销）+ 当前待完成 ---- */
@@ -481,7 +485,7 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 5px 8px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -548,11 +552,11 @@ onMounted(async () => {
 .percent-control {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
 }
 
 .step-num {
-  min-width: 44px;
+  min-width: 40px;
   padding: 5px 0;
   border: none;
   border-radius: var(--radius-sm);
@@ -570,7 +574,7 @@ onMounted(async () => {
 }
 
 .step-input {
-  width: 58px;
+  width: 48px;
   padding: 4px 6px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -578,8 +582,9 @@ onMounted(async () => {
 
 .report-btn {
   margin-left: auto;
-  padding: 7px 14px; /* 卡内紧凑档（全局类的形态不变，只缩了呼吸空间） */
-  font-size: 13px;
+  padding: 6px 10px; /* 卡内紧凑档（全局类的形态不变，只缩了呼吸空间） */
+  font-size: 12px;
+  white-space: nowrap;
 }
 
 /* ---- 空态 / 停留态 ---- */
@@ -611,11 +616,34 @@ onMounted(async () => {
 .picker {
   flex: 1;
   min-height: 0;
-  /* 外层 .board-card 已 overflow:hidden 切断 webview 滚动条；此处一并去掉内部滚轮，避免视觉/交互残留 */
-  overflow: hidden;
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+/* 组列表滚动区（2026-08-28 验收修订：任务多时要能滚到，标题/返回不跟着滚） */
+.picker-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding-right: 4px; /* 行与滚动条之间的呼吸空间 */
+}
+
+/* 细滚动条：透明浮层卡片里 WebView 默认粗条太突兀 */
+.picker-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.picker-list::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-sm);
+  background: var(--text-muted);
+}
+
+.picker-list::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .picker-title {
@@ -645,7 +673,7 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 5px 8px;
   border: var(--border-default);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -688,8 +716,8 @@ onMounted(async () => {
 
 /* ---- 底部今日总量 ---- */
 .foot {
-  margin-top: 10px;
-  padding-top: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: var(--border-default);
 }
 
