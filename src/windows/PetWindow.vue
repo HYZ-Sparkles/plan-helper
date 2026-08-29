@@ -15,8 +15,11 @@
  * - 再见：17 Jump in to the Box 播完 → exitApp()（关闭全部窗口）
  * - 拖拽（09，PetDragBounds）：moveTo 每帧经 dragBounds 钳制（任务栏禁入/全可见/跨屏
  *   重叠面积选屏），松手 <20px 吸附最近工作区边缘；拖动期间 freeze 保持当前帧不动、
- *   松手 unfreeze 继续（不打断播放状态）；小看板按桌宠**实际**位移随动（PetBoardCoupling：
- *   位置联动、动作独立）；休息模式拖后非站立先 3 Sit to Stand 再 15 Attack（用户动作占锁）
+ *   松手 unfreeze 继续（不打断播放状态）；小看板可见时与桌宠成**刚性组合体**按整体
+ *   矩形钳制（一个被边界挡住另一个也一起停，相对位置固定；PetBoardCoupling 位置联动、
+ *   动作独立）；休息模式拖后非站立先 3 Sit to Stand 再 15 Attack（用户动作占锁）
+ * - 小看板显隐跟着模式走：休息模式隐藏（含大面板确认后也不亮，67 休息即不工作），
+ *   工作模式有当前任务才恢复（恢复时以桌宠为锚刚性就位，不重叠）
  */
 import { onMounted, reactive, ref } from "vue";
 import { emitTo, listen } from "@tauri-apps/api/event";
@@ -81,7 +84,7 @@ onMounted(async () => {
     /* 后端不可达保持默认工作 */
   }
   engine.setMover((mover = await createTauriMover()));
-  void cacheBoardGeometry();
+  void syncBoardAtStartup();
 
   // 系统关闭请求拦截：桌宠无关闭按钮，退出只能走「再见」/托盘（工单 14）
   await win.onCloseRequested((e) => e.preventDefault());
@@ -94,7 +97,32 @@ onMounted(async () => {
     menuOpen.value = false;
     menuClosedAt = performance.now();
   });
+  // 大面板确认（06）会点亮小看板：工作模式按刚性组合就位，休息模式坚持隐藏（67 休息
+  // 即不工作——显隐跟着模式走，2026-08-29 反馈）
+  await listen("mini-board:refresh", () => {
+    if (mode.value === "rest") {
+      boardAttached = false;
+      void hideWindow("mini-board");
+    } else {
+      void attachBoardRigidly();
+    }
+  });
 });
+
+/** 启动时对小看板（Rust 侧已按"工作时间 + 有当前任务"决定显隐）：缓存几何并对齐挂靠
+ *  状态——休息模式兜底隐藏（Rust/前端判定间的毫秒级漂移不留下可见破绽） */
+async function syncBoardAtStartup() {
+  const mini = await WebviewWindow.getByLabel("mini-board");
+  if (!mini) return;
+  const [p, s] = await Promise.all([mini.outerPosition(), mini.outerSize()]);
+  Object.assign(board, { x: p.x, y: p.y, width: s.width, height: s.height, ready: true });
+  if (mode.value === "rest") {
+    boardAttached = false;
+    await mini.hide();
+  } else {
+    boardAttached = await mini.isVisible();
+  }
+}
 
 /** 启动序列完成：进入正常态并按初始模式分流——工作 = AutoOpen 检测 + 稍后转睡眠；休息 = 随机动作计时 */
 function onStartupSettled() {
@@ -176,6 +204,7 @@ function switchMode() {
     if (!ok) return;
     mode.value = "rest";
     randomGen++;
+    boardAttached = false;
     void hideWindow("mini-board"); // 休息即不工作（67）
   }
 }
@@ -185,19 +214,47 @@ async function hideWindow(label: string) {
   await target?.hide();
 }
 
-/** 切回工作模式恢复小看板。可见性不变式沿用 07 的启动规则：小看板可见 ⇔ 存在当前任务
- *  （含"任务完成"停留态，board.current 为 Some）；无当前任务时它本就未显示，谈不上恢复，
- *  等大面板确认分配后由 06 的确认流程点亮。 */
+/** 切回工作模式恢复小看板。可见性不变式：小看板可见 ⇔ 工作模式且存在当前任务（含
+ *  "任务完成"停留态，board.current 为 Some）；无当前任务时它本就未显示，等大面板
+ *  确认分配后由 refresh 监听点亮。 */
 async function restoreMiniBoard() {
   try {
-    const board = await getMiniBoard();
-    if (board.current) {
-      const mini = await WebviewWindow.getByLabel("mini-board");
-      await mini?.show();
-    }
+    const view = await getMiniBoard();
+    if (!view.current) return;
+    await attachBoardRigidly();
   } catch {
     /* 读态失败保持隐藏 */
   }
+}
+
+/** 小看板刚性挂靠：以桌宠当前位置为锚重摆（板在桌宠正下方 12px、水平居中——同启动
+ *  摆位）；下方放不下则**组合体整体上移**（不是把板塞进桌宠身体里），保证二者相对
+ *  位置固定、不重叠（2026-08-29 反馈：一个被边界挡住另一个也一起让位）。 */
+async function attachBoardRigidly() {
+  const mini = await WebviewWindow.getByLabel("mini-board");
+  if (!mini) return;
+  if (mover && board.ready) {
+    const pet = mover.position();
+    const s = mover.size();
+    const area = mover.workArea();
+    const gap = 12;
+    const boardX = Math.round(
+      Math.min(Math.max(pet.x + (s.width - board.width) / 2, area.x), area.x + area.width - board.width),
+    );
+    let boardY = pet.y + s.height + gap;
+    let petY = pet.y;
+    const overflow = boardY + board.height - (area.y + area.height);
+    if (overflow > 0) {
+      petY = Math.max(petY - overflow, area.y); // 顶部极端时以桌宠可见优先
+      boardY = petY + s.height + gap;
+    }
+    board.x = boardX;
+    board.y = Math.round(boardY);
+    mover.moveTo(pet.x, petY);
+    await mini.setPosition(new PhysicalPosition(board.x, board.y));
+  }
+  await mini.show();
+  boardAttached = true;
 }
 
 /* ---- 随机动作调度（09，PetRandomAction）：距上一次动作结束 300s，吃:跳:闲坐 = 4:3:3 ---- */
@@ -238,7 +295,13 @@ function goodbye() {
   randomGen++;
 }
 
-/* ---- 点击 / 拖拽（09 完整形态：PetDragBounds 四约束 + 看板随动 + 冻结帧） ---- */
+/* ---- 点击 / 拖拽（09 完整形态：PetDragBounds 四约束 + 刚性看板组合 + 冻结帧） ---- */
+
+/** 小看板几何缓存（mount 取一次，之后只被本窗口的摆位/随动改写） */
+const board = { x: 0, y: 0, width: 0, height: 0, ready: false };
+/** 小看板挂靠状态（可见 = 与桌宠成刚性组合体）。显隐来源：Rust 启动（工作时段 + 有
+ *  当前任务）、大面板确认（06）、模式切换（08/67）——PetWindow 持续跟踪。 */
+let boardAttached = false;
 
 let drag: {
   px: number;
@@ -246,19 +309,30 @@ let drag: {
   winX: number;
   winY: number; // 桌宠窗口起点（物理像素）
   boardX: number;
-  boardY: number; // 小看板窗口起点（几何未就绪为 NaN，随动跳过）
+  boardY: number; // 小看板窗口起点（未挂靠为 NaN，随动跳过）
+  unitX: number;
+  unitY: number; // 组合体（桌宠∪看板；未挂靠 = 桌宠矩形）起点
+  unitW: number;
+  unitH: number;
   factor: number;
   moved: boolean;
 } | null = null;
 
-/** 小看板几何缓存（PetBoardCoupling 位置联动）：mount 取一次，之后只被本窗口的随动改写 */
-const board = { x: 0, y: 0, width: 0, height: 0, ready: false };
-
-async function cacheBoardGeometry() {
-  const mini = await WebviewWindow.getByLabel("mini-board");
-  if (!mini) return;
-  const [p, s] = await Promise.all([mini.outerPosition(), mini.outerSize()]);
-  Object.assign(board, { x: p.x, y: p.y, width: s.width, height: s.height, ready: true });
+/** 组合体矩形 = 桌宠 ∪ 小看板（挂靠时）；返回拖拽起点全套几何 */
+function unitOrigin(petX: number, petY: number, petW: number, petH: number) {
+  if (!boardAttached || !board.ready) {
+    return { boardX: NaN, boardY: NaN, unitX: petX, unitY: petY, unitW: petW, unitH: petH };
+  }
+  const unitX = Math.min(petX, board.x);
+  const unitY = Math.min(petY, board.y);
+  return {
+    boardX: board.x,
+    boardY: board.y,
+    unitX,
+    unitY,
+    unitW: Math.max(petX + petW, board.x + board.width) - unitX,
+    unitH: Math.max(petY + petH, board.y + board.height) - unitY,
+  };
 }
 
 /** 显示器快照：mover 未提供时退化为单屏（workArea 等价物） */
@@ -270,14 +344,14 @@ function monitorsSnapshot(): MonitorArea[] {
   ];
 }
 
-/** 小看板随动落位：钳制进它自己的显示器工作区（始终全可见）；桌宠动作不带动它 */
-function placeBoard(x: number, y: number) {
-  if (!board.ready || !Number.isFinite(x)) return;
-  const next = clampDragPosition(x, y, board.width, board.height, monitorsSnapshot());
-  board.x = next.x;
-  board.y = next.y;
+/** 小看板刚性落位：组合体已整体钳制，这里只写缓存 + 移窗（未挂靠/几何未就绪跳过）。
+ *  桌宠动作不带动看板（PetBoardCoupling：位置联动、动作独立）。 */
+function placeBoardRaw(x: number, y: number) {
+  if (!Number.isFinite(x)) return;
+  board.x = Math.round(x);
+  board.y = Math.round(y);
   void WebviewWindow.getByLabel("mini-board").then((mini) =>
-    mini?.setPosition(new PhysicalPosition(next.x, next.y)),
+    mini?.setPosition(new PhysicalPosition(board.x, board.y)),
   );
 }
 
@@ -285,15 +359,15 @@ function onPointerDown(e: PointerEvent) {
   if (interactionsOff() || !mover) return;
   void mover.refresh?.(); // 拖拽前刷新屏幕拓扑（显示器热插拔/跨屏 DPI 变化）
   const p = mover.position();
+  const s = mover.size();
   drag = {
     px: e.screenX,
     py: e.screenY,
     winX: p.x,
     winY: p.y,
-    boardX: board.ready ? board.x : NaN,
-    boardY: board.ready ? board.y : NaN,
     factor: mover.scaleFactor?.() ?? 1,
     moved: false,
+    ...unitOrigin(p.x, p.y, s.width, s.height),
   };
   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 }
@@ -308,12 +382,13 @@ function onPointerMove(e: PointerEvent) {
     d.moved = true;
     engine.freeze(); // 拖动期间保持当前帧不动（README 原义），播放状态保留
   }
-  const size = mover.size();
-  // PetDragBounds 约束 1/2/3：跨屏重叠面积选屏 + 钳进工作区（任务栏禁入、全可见）
-  const next = clampDragPosition(d.winX + dx, d.winY + dy, size.width, size.height, monitorsSnapshot());
-  mover.moveTo(next.x, next.y);
-  // 小看板按桌宠实际位移（钳制后）随动，边缘处同步停住不漂移
-  placeBoard(d.boardX + (next.x - d.winX), d.boardY + (next.y - d.winY));
+  // PetDragBounds 约束 1/2/3 按**组合体**（未挂靠 = 桌宠单体）矩形：跨屏重叠面积选屏 +
+  // 钳进工作区。刚性：一个成员被边界挡住，全体一起停（相对位置固定，2026-08-29 反馈）
+  const landing = clampDragPosition(d.unitX + dx, d.unitY + dy, d.unitW, d.unitH, monitorsSnapshot());
+  const ax = landing.x - d.unitX;
+  const ay = landing.y - d.unitY;
+  mover.moveTo(d.winX + ax, d.winY + ay);
+  placeBoardRaw(d.boardX + ax, d.boardY + ay);
 }
 
 function onPointerUp() {
@@ -324,20 +399,22 @@ function onPointerUp() {
     void toggleMenu();
     return;
   }
-  // PetDragBounds 约束 4：停靠 <20px（逻辑）自动吸附最近工作区边缘
-  const size = mover.size();
-  const cur = mover.position();
-  const landing = clampDragPosition(cur.x, cur.y, size.width, size.height, monitorsSnapshot());
+  // PetDragBounds 约束 4：组合体贴近工作区边（<20px 逻辑）吸附最近边，增量同样刚性
+  const appliedX = mover.position().x - d.winX;
+  const appliedY = mover.position().y - d.winY;
+  const cur = clampDragPosition(d.unitX + appliedX, d.unitY + appliedY, d.unitW, d.unitH, monitorsSnapshot());
   const snapped = snapToEdges(
-    landing.x,
-    landing.y,
-    size.width,
-    size.height,
-    landing.monitor,
+    cur.x,
+    cur.y,
+    d.unitW,
+    d.unitH,
+    cur.monitor,
     SNAP_PX * (mover.scaleFactor?.() ?? 1),
   );
-  mover.moveTo(snapped.x, snapped.y);
-  placeBoard(d.boardX + (snapped.x - d.winX), d.boardY + (snapped.y - d.winY));
+  const ax = snapped.x - d.unitX;
+  const ay = snapped.y - d.unitY;
+  mover.moveTo(d.winX + ax, d.winY + ay);
+  placeBoardRaw(d.boardX + ax, d.boardY + ay);
   engine.unfreeze(); // 动画从冻结帧继续（拖动不打断播放状态）
   if (mode.value === "rest" && phase.value === "normal") requestAfterDrag();
 }

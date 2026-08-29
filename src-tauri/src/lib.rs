@@ -10,6 +10,7 @@ pub mod infra;
 use app_state::AppState;
 use clock::SystemClock;
 use domain::progress::ProgressService;
+use domain::settings::SettingsService;
 use infra::db;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -22,11 +23,14 @@ pub fn run() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             let conn = db::open(&dir.join("plan-helper.db"))?;
-            // 重启时已有有效当前任务则直接亮出小看板（无则保持隐藏，等大面板确认分配）
-            if ProgressService::board(&conn, &SystemClock)
+            // 重启时亮出小看板的条件：有有效当前任务**且此刻是工作时间**（= 初始工作
+            // 模式）。休息时段启动进休息模式、小看板保持隐藏（CONTEXT 休息即不工作），
+            // 切回工作模式由前端按同一规则恢复显示（2026-08-29 用户反馈）
+            let show_board = ProgressService::board(&conn, &SystemClock)
                 .map(|v| v.current.is_some())
                 .unwrap_or(false)
-            {
+                && SettingsService::is_work_time(&conn, &SystemClock).unwrap_or(false);
+            if show_board {
                 if let Some(mini) = app.get_webview_window("mini-board") {
                     mini.show()?;
                 }
