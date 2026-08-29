@@ -6,14 +6,36 @@
 
 **Blocked by:** 08 桌宠动画引擎与模式
 
-**Status:** ready-for-agent
+**Status:** ready-for-review
 
-- [ ] 拖动遵循 PetDragBounds 四约束：任务栏区域不可拖入、不超出屏幕物理边界（始终全可见）、多显示器可跨（主显示器基准相对坐标）、停靠边缘 <20px 自动吸附
-- [ ] 拖动期间保持当前帧不动、移动完了才继续（README 原义）；拖动不打断动画播放状态
-- [ ] 休息模式下拖动结束：若非站立先 3 Sit to Stand，然后 15 Attack
-- [ ] 小看板与桌宠一起拖动（共享坐标），但桌宠动作不带动小看板（PetBoardCoupling：位置联动、动作独立）——07 的小看板随动至此完整
-- [ ] 当前动作锁：用户主动动作（菜单项、拖后 Attack、模式切换）播放中，按钮禁用 + muted 色 + not-allowed 光标 + tooltip"桌宠正在执行动作"；拖拽与打开菜单查看不受影响，菜单项点击无效
-- [ ] 系统随机动作不占锁：仅空闲时触发，执行完回空闲，可连续出现（无去重、无容量上限）
-- [ ] 随机动作参数：吃 : 跳 : 闲坐 = 4 : 3 : 3，距上一次（用户或随机）动作结束固定 300 秒；工作模式不触发；吃饭动作=朝左/右跑一段→吃→走回原位；跳=跳过去再跳回来（14 Jump 两次）；闲坐=1 Stand to Sit / 3 Sit to Stand
-- [ ] 动作衔接：同作者帧自然过渡，无法衔接时快速淡出→淡入避免跳变
+- [x] 拖动遵循 PetDragBounds 四约束：任务栏区域不可拖入、不超出屏幕物理边界（始终全可见）、多显示器可跨（主显示器基准相对坐标）、停靠边缘 <20px 自动吸附
+- [x] 拖动期间保持当前帧不动、移动完了才继续（README 原义）；拖动不打断动画播放状态
+- [x] 休息模式下拖动结束：若非站立先 3 Sit to Stand，然后 15 Attack
+- [x] 小看板与桌宠一起拖动（共享坐标），但桌宠动作不带动小看板（PetBoardCoupling：位置联动、动作独立）——07 的小看板随动至此完整
+- [x] 当前动作锁：用户主动动作（菜单项、拖后 Attack、模式切换）播放中，按钮禁用 + muted 色 + not-allowed 光标 + tooltip"桌宠正在执行动作"；拖拽与打开菜单查看不受影响，菜单项点击无效
+- [x] 系统随机动作不占锁：仅空闲时触发，执行完回空闲，可连续出现（无去重、无容量上限）
+- [x] 随机动作参数：吃 : 跳 : 闲坐 = 4 : 3 : 3，距上一次（用户或随机）动作结束固定 300 秒；工作模式不触发；吃饭动作=朝左/右跑一段→吃→走回原位；跳=跳过去再跳回来（14 Jump 两次）；闲坐=1 Stand to Sit / 3 Sit to Stand
+- [x] 动作衔接：同作者帧自然过渡，无法衔接时快速淡出→淡入避免跳变
 - [ ] 手动验收：四条拖动边界、锁的禁用/放行矩阵、随机动作触发与回位
+
+## Comments
+
+**2026-08-29 实施记录（工单 09）**
+
+- **新增纯逻辑模块**（Node 可直跑、确定性回归覆盖）：`src/lib/pet/dragBounds.ts`（四约束数学核心：`monitorForRect` 按窗口矩形与各屏**重叠面积最大**选屏 → `clampIntoWorkArea` 钳进工作区——任务栏禁入与全可见一并成立；`snapToEdges` 距最近工作区边 < 阈值贴齐）；`src/lib/pet/actions.ts`（`pickRandomKind` 4:3:3 权重抽取、`randomSteps` 吃/跳/闲坐编排、`afterDragSteps` 拖后起身+Attack、`RANDOM_INTERVAL_MS=300_000`）。
+- **引擎增补（engine.ts）**：`freeze()/unfreeze()`——拖拽期间帧与位移停推、步内时长丢弃不累积（松手不快进），unfreeze 把在飞位移以当前位置重锚定、原目标为终点（窗口不回跳）；`MovementSpec` 加 `"return"` 方向（回到本动作开始时的 x——吃饭走回原位的回程，起点被钳短也不影响回程落点）；`EngineState.flick` 抢占硬切计数（用户动作替换未稳态系统动作时 +1，PetSprite 据此 220ms 淡出→淡入；同作者衔接链/稳态替换不触发）；`autoDirection` 导出（选屏幕余量大侧，随机动作与调试页共用）。
+- **修复 08 遗留两个引擎 bug（均写入确定性回归）**：(1) `begin()` 替换运行动作不取消在排 rAF——每次站坐轮换/抢占叠一个 tick 循环、动画越播越快；先 `stopLoop()` 再续排。(2) 位移终值 p=1 钉死只在序列末步——多步序列的**中间步**结束时采样停在 <1，回程起点带小数偏差；钉死提到 `advanceStep` 顶部对每步生效。
+- **tauriMover v2**：缓存**全部显示器**快照（`monitors()` 给 dragBounds、拖拽前 `refresh()` 应对热插拔/跨屏 DPI），`workArea()` = 桌宠中心所在屏的工作区；moveTo 改**原始落位**（钳制归调用方，职责不再重复），坐标取整。capabilities 显式补 `core:window:allow-available-monitors`。
+- **PetWindow 编排**：拖拽 moveTo 每帧经 dragBounds 钳制、松手吸附（阈值 20 逻辑 px × 缩放）；位移过 4px slop 即 freeze、松手 unfreeze 后休息模式走 `afterDragSteps`（用户动作占锁，settle 重排随机计时；工作模式不打扰——睡眠循环继续播）；**小看板随动**：按桌宠**实际**（钳制后）位移平移、各自钳进各自工作区（边缘处同步停住不漂移），桌宠动作不带动它；**随机调度**：`armRandom`（每个用户/随机动作 settle 重排 300s 计时、gen 自弃旧计时）+ 触发时全量守卫复查（模式/阶段/拖拽中）+ 被拒自愈重排；08 的 40s 站坐轮换 stand-in 按计划移除，站↔坐切换由随机动作"闲坐"承担；pose 追踪决定闲坐切换方向与拖后是否先起身。
+- **验证**：`scripts/pet09-regression.ts`（esbuild bundle 后 node 直跑，rAF 手动推进）38 项断言全过——四约束边界、冻结/解冻（帧停、时长不累积、重锚定落原目标）、return 回程（含钳短场景）、rAF 叠加回归、锁矩阵、flick、4:3:3 边界、编排结构/翻转/回程、autoDirection；`npm run build`（vue-tsc）与 `cargo test` 全绿。
+- **验收方式**：`npm run tauri dev` 手动过清单——四条拖动边界（拖到任务栏/屏幕外/跨屏/贴边松手）、锁矩阵（拖后 Attack 播放中菜单三项禁用可查看、拖拽仍可用、Attack 完恢复）、随机动作（休息模式等 300s 或临时把 `RANDOM_INTERVAL_MS` 调小验证吃/跳/闲坐与回位、工作模式不触发）。
+
+**2026-08-29 code-review（两轴：Standards + Spec）修订**
+
+（并行审查子代理因环境模型供应商未配置启动失败，两轴审查在主会话内完成——按 AGENTS.md 规范 + Fowler smell 基线与工单 9 条逐文件核对。）
+
+- **修复（Spec：动作衔接）**：坐姿起跑的随机吃/跳原先从 Sit Idle 硬切 Run/Jump 首帧（稳态替换不触发 flick 淡出淡入），违反"同作者帧自然过渡"——前置 3 Sit to Stand（与拖后动作同例），回归补 1 断言。
+- **修复（健壮性）**：`tauriMover.monitors()` 在 `availableMonitors()` 被拒（权限/驱动异常）时会返回空数组，`monitorForRect` 将在 `undefined` 上崩溃——读取失败保持旧快照、初始失败单屏兜底，`monitors()` 永不返回空。
+- 复查通过项：样式全走 token 无硬编码色值；新逻辑模块化且 Node 可直跑；`monitorsSnapshot` 对无多屏 mover 的退化路径正确；锁矩阵（用户过渡中拒一切、系统稳态可被用户替换、拖后 Attack settle 重排计时）与 README/CONTEXT 语义一致；无 scope creep（未动 Rust 领域层，capabilities 仅补 `core:window:allow-available-monitors`）。
+
+

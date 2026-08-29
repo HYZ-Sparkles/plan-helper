@@ -43,7 +43,7 @@ watch(sel, () => {
 /** 手动帧状态（引擎停止时生效） */
 const manual = reactive({ anim: 7, frame: 0, flip: false });
 const playing = ref(false);
-const engineState = reactive<EngineState>({ anim: 0, frame: 0, flip: false, locked: false, busy: false });
+const engineState = reactive<EngineState>({ anim: 0, frame: 0, flip: false, locked: false, busy: false, flick: 0 });
 
 /** 模拟 mover：预览盒位置用 ref 暴露给模板 */
 const simPos = ref({ x: (SIM_AREA.width - SIM_WIN) / 2, y: SIM_AREA.height - SIM_WIN - 24 });

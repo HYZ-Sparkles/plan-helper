@@ -6,10 +6,11 @@
  * - 像素锐利：整数倍缩放（SHEET_SCALE=2）+ image-rendering: pixelated
  * - 水平翻转：scaleX(-1) 镜像（素材朝右，朝左移动时用）
  * - 摆放微调：帧级 ox/oy（素材像素）叠加在锚定之上；translate 写在 scaleX 之前，
- *   偏移方向是屏幕空间（翻转不镜像偏移），正 = 右 / 下
+ *   偏移方向是屏幕空间（翻转不镜像偏移方向），正 = 右 / 下
+ * - 硬切衔接（工单 09）：fadeSignal 计数变化时快速淡出→淡入一次，掩盖抢占产生的帧跳变
  * 水平居中与地面线定位由外层容器负责（flex 底对齐）。
  */
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { ANIMATIONS, PET_SHEET_URL, SHEET_SCALE, SHEET_WIDTH } from "../lib/pet/animations";
 
 /** 帧摆放微调（调试页实时预览用；缺省回落到帧清单里的持久值） */
@@ -24,7 +25,21 @@ const props = defineProps<{
   frame: number;
   flip?: boolean;
   nudge?: SpriteNudge;
+  /** 硬切淡出淡入信号（引擎 flick 计数，仅变化时触发一次动画） */
+  fadeSignal?: number;
 }>();
+
+const el = ref<HTMLElement>();
+watch(
+  () => props.fadeSignal,
+  () => {
+    const node = el.value;
+    if (!node || !props.fadeSignal) return;
+    node.classList.remove("quick-fade");
+    void node.offsetWidth; // 强制 reflow，连续两次硬切各自触发动画
+    node.classList.add("quick-fade");
+  },
+);
 
 const rect = computed(() => {
   const def = ANIMATIONS[props.anim];
@@ -56,12 +71,29 @@ const style = computed(() => {
 </script>
 
 <template>
-  <div class="pet-sprite" :style="style" />
+  <div ref="el" class="pet-sprite" :style="style" />
 </template>
 
 <style scoped>
 .pet-sprite {
   flex: none; /* 不被 flex 容器压缩，帧宽随动画逐帧变化 */
   will-change: background-position, transform;
+}
+
+/* 无法衔接的硬切（引擎 flick）：快速淡出→淡入避免跳变 */
+.quick-fade {
+  animation: pet-quick-fade 220ms ease-out;
+}
+
+@keyframes pet-quick-fade {
+  0% {
+    opacity: 1;
+  }
+  45% {
+    opacity: 0.15;
+  }
+  100% {
+    opacity: 1;
+  }
 }
 </style>
