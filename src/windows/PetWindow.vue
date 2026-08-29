@@ -3,8 +3,10 @@
  * 桌宠窗口（工单 08 主接线）：启动序列 → 正常态（菜单 / 模式切换 / 再见 / 拖拽）。
  *
  * - 启动序列 21→22→23→24→7(循环)：期间点击/菜单/拖拽全部忽略（比"动画播放中"更严格）
- * - 序列完成（7 开始循环那一刻）→ 进入正常态：默认工作模式，700ms 后 Stand to Sleep 过渡
- *   进 Sleep Idle；AutoOpenMainBoard 检测此刻接入（工作模式 + 今日未分配 → 弹大面板）
+ * - 初始模式按工作时间判定（isWorkTime：工作日 + 时间窗口内 = 工作，否则休息）。
+ *   序列完成（7 开始循环那一刻）→ 进入正常态：工作模式 700ms 后 Stand to Sleep 过渡
+ *   进 Sleep Idle，且 AutoOpenMainBoard 检测接入（今日未分配 → 弹大面板）；休息模式
+ *   序列本就收在 7 Stand Idle（休息常驻），直接排站坐轮换，不弹大面板
  * - 模式切换（菜单项，用户动作占锁）：休息→工作 4 Stand to Sleep；工作→休息 6 Sleep to
  *   Stand；过渡完进对应 idle（工作=5 循环；休息=7/2 站坐轮换，40s 一换，09 将换成加权随机）
  * - 再见：17 Jump in to the Box 播完 → exitApp()（关闭全部窗口）
@@ -20,7 +22,7 @@ import PetSprite from "../components/PetSprite.vue";
 import { PetEngine, type EngineState, type PetMover } from "../lib/pet/engine";
 import { createTauriMover } from "../lib/pet/tauriMover";
 import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
-import { exitApp, getMiniBoard, shouldAutoOpenMainBoard } from "../lib/api";
+import { exitApp, getMiniBoard, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
 /** 休息模式站↔坐轮换间隔（README"常驻一段时间"；09 的 PetRandomAction 上线后由 300s 权重抽取取代） */
 const REST_ALTERNATE_MS = 40_000;
@@ -35,6 +37,7 @@ let mover: PetMover | null = null;
 const sprite = reactive<EngineState>({ anim: 0, frame: 0, flip: false, locked: false, busy: false });
 /** startup = 启动序列中（一切交互禁用）；goodbye = 跳箱动画中（同禁用） */
 const phase = ref<"startup" | "normal" | "goodbye">("startup");
+/** 当前模式：初始值在 onMounted 里按工作时间判定覆写（后端不可达时保持默认工作） */
 const mode = ref<PetMode>("work");
 const menuOpen = ref(false);
 /** 菜单因失焦被关掉的时刻：紧接着的宠物点击属于"这次点击本身"，不再当开菜单 */
@@ -62,6 +65,12 @@ onMounted(async () => {
     ],
     onSettle: onStartupSettled,
   });
+  // 初始模式按工作时间判定（invoke 毫秒级、序列数秒，来得及在序列播完前落定）
+  try {
+    mode.value = (await isWorkTime()) ? "work" : "rest";
+  } catch {
+    /* 后端不可达保持默认工作 */
+  }
   engine.setMover((mover = await createTauriMover()));
 
   // 系统关闭请求拦截：桌宠无关闭按钮，退出只能走「再见」/托盘（工单 14）
@@ -77,22 +86,30 @@ onMounted(async () => {
   });
 });
 
-/** 启动序列完成：进入正常态 + AutoOpenMainBoard 检测 + 稍后转入工作睡眠 */
+/** 启动序列完成：进入正常态并按初始模式分流——工作 = AutoOpen 检测 + 稍后转睡眠；休息 = 站坐轮换 */
 function onStartupSettled() {
   phase.value = "normal";
-  void checkAutoOpen();
+  if (mode.value === "rest") {
+    scheduleAlternation(); // 序列已收在 7 Stand Idle（休息常驻动作），直接排轮换
+    return;
+  }
+  void checkAutoOpen(false);
   window.setTimeout(() => {
-    if (phase.value === "normal" && mode.value === "work" && !engine.state().busy) {
+    // 守卫判 locked 而非 busy：稳态 idle 循环里 action 永不清空、busy 恒真，
+    // 误判 busy 会让转睡眠永不触发（工作模式下一直站立）
+    if (phase.value === "normal" && mode.value === "work" && !engine.state().locked) {
       engine.request({ lock: false, steps: [{ anim: 4 }, { anim: 5, loop: true }] });
     }
   }, STARTUP_STAND_BEAT_MS);
 }
 
-/** AutoOpenMainBoard：工作模式 + 今日未分配 → 弹大面板（沿用控制面板的重开语义带回数据） */
-async function checkAutoOpen() {
+/** AutoOpenMainBoard 检测：工作模式 + 今日未分配 → 弹大面板（沿用控制面板的重开语义带回数据）。
+ *  manual = 手动切入工作模式（用户主动选加班，非工作日也弹）；启动后的自动检测传
+ *  false（非工作日不打扰）。 */
+async function checkAutoOpen(manual: boolean) {
   if (mode.value !== "work") return;
   try {
-    if (await shouldAutoOpenMainBoard(true)) await openMainBoard();
+    if (await shouldAutoOpenMainBoard(true, manual)) await openMainBoard();
   } catch {
     /* 后端不可达时静默：大面板还有控制面板入口兜底 */
   }
@@ -130,7 +147,7 @@ function switchMode() {
       steps: [{ anim: 4 }, { anim: 5, loop: true }], // Stand to Sleep
       onSettle: () => {
         void restoreMiniBoard();
-        void checkAutoOpen();
+        void checkAutoOpen(true); // 手动切入 = 主动加班：非工作日也弹大面板选任务
       },
     });
     if (!ok) return;

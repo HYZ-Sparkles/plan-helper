@@ -66,3 +66,84 @@ fn app_state_view_composes_settings_with_injected_now() {
     assert_eq!(view.server_now, clock.0);
     assert_eq!(view.settings, Settings::default());
 }
+
+#[test]
+fn is_work_time_requires_workday_and_window() {
+    // 测试情况：默认设置（工作日周一至五、窗口 09:00–18:00），用注入时钟在
+    //           窗口内 / 窗口前 / 窗口后 / 休息日各取一个时刻判定。
+    // 正确结果：工作日窗口内 true；窗口外（08:00、18:00 整点 = 右开端点）false；
+    //           休息日（周六）即便窗口内时刻也 false。
+    let conn = db::open_in_memory().unwrap();
+    SettingsService::load(&conn).unwrap();
+    assert!(
+        SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 24, 10, 0)).unwrap(),
+        "周一 10:00 在窗"
+    );
+    assert!(
+        !SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 24, 8, 0)).unwrap(),
+        "周一 08:00 窗口前"
+    );
+    assert!(
+        !SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 24, 18, 0)).unwrap(),
+        "周一 18:00 整 = 窗口结束那一刻"
+    );
+    assert!(
+        !SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 29, 10, 0)).unwrap(),
+        "周六 10:00 休息日"
+    );
+}
+
+#[test]
+fn is_work_time_covers_multi_window_and_cross_midnight() {
+    // 测试情况：自定义设置（工作日周二/周四、窗口 10:00–11:30 与跨午夜 20:00–01:00），
+    //           在两段窗口内、窗间空档、跨午夜今晚段与凌晨段分别判定。
+    // 正确结果：两段窗口内 true；窗间空档 false；跨午夜今晚段（周四 23:00）true；
+    //           凌晨段归属窗口开始日——周五 00:30（昨天周四是工作日）true、
+    //           周五 01:30（已出窗）false；周日 00:30（昨天周六非工作日）false。
+    let conn = db::open_in_memory().unwrap();
+    SettingsService::load(&conn).unwrap();
+    SettingsService::save(
+        &conn,
+        &fixed_clock(2026, 8, 20, 12, 0),
+        &Settings {
+            time_windows: vec![
+                TimeWindow {
+                    start_minute: 10 * 60,
+                    end_minute: 11 * 60 + 30,
+                },
+                TimeWindow {
+                    start_minute: 20 * 60, // 20:00–01:00 跨午夜，end < start
+                    end_minute: 60,
+                },
+            ],
+            workdays: vec![2, 4], // 周二、周四
+            ..Settings::default()
+        },
+    )
+    .unwrap();
+
+    assert!(
+        SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 25, 11, 0)).unwrap(),
+        "周二 11:00 第一段在窗"
+    );
+    assert!(
+        !SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 25, 15, 0)).unwrap(),
+        "周二 15:00 窗间空档"
+    );
+    assert!(
+        SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 27, 23, 0)).unwrap(),
+        "周四 23:00 跨午夜今晚段"
+    );
+    assert!(
+        SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 28, 0, 30)).unwrap(),
+        "周五 00:30 凌晨段，窗口开始日（周四）是工作日"
+    );
+    assert!(
+        !SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 28, 1, 30)).unwrap(),
+        "周五 01:30 已出窗"
+    );
+    assert!(
+        !SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 30, 0, 30)).unwrap(),
+        "周日 00:30 昨天周六非工作日，凌晨段不算"
+    );
+}

@@ -19,8 +19,16 @@ fn sample(name: &str) -> PlanDraft {
     sg.has_subgoals = true;
     sg.estimated_minutes = None;
     sg.subgoals = vec![
-        SubGoalDraft { id: None, name: "读第一章".into(), estimated_minutes: 60 },
-        SubGoalDraft { id: None, name: "读第二章".into(), estimated_minutes: 30 },
+        SubGoalDraft {
+            id: None,
+            name: "读第一章".into(),
+            estimated_minutes: 60,
+        },
+        SubGoalDraft {
+            id: None,
+            name: "读第二章".into(),
+            estimated_minutes: 30,
+        },
     ];
     PlanDraft {
         name: name.into(),
@@ -56,15 +64,29 @@ fn board_groups_active_plans_selectable_only() {
     assert_eq!(v.groups[0].plan_name, "高优先计划", "Priority 降序");
     assert_eq!(v.groups[0].priority, Priority::High);
 
-    let names = |g: usize| v.groups[g].tasks.iter().map(|t| t.name.as_str()).collect::<Vec<_>>();
-    assert_eq!(names(1), vec!["A", "SG"], "被阻塞的 B 不进候选，其余按 position 排");
+    let names = |g: usize| {
+        v.groups[g]
+            .tasks
+            .iter()
+            .map(|t| t.name.as_str())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        names(1),
+        vec!["A", "SG"],
+        "被阻塞的 B 不进候选，其余按 position 排"
+    );
     let sg = v.groups[1].tasks.iter().find(|t| t.name == "SG").unwrap();
     assert_eq!(sg.estimated_minutes, 90, "子目标任务耗时 = 子目标求和");
     let a_id = v.groups[1].tasks.iter().find(|t| t.name == "A").unwrap().id;
 
     force_task_status(&conn, a_id, TaskStatus::Completed);
     let v2 = AllocationService::board(&conn, &at(2026, 8, 24, 9, 0)).unwrap();
-    let names2 = v2.groups[1].tasks.iter().map(|t| t.name.as_str()).collect::<Vec<_>>();
+    let names2 = v2.groups[1]
+        .tasks
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect::<Vec<_>>();
     assert_eq!(names2, vec!["B", "SG"], "A 完成后不进候选，B 实时解锁进入");
 }
 
@@ -80,16 +102,28 @@ fn commit_persists_overwrites_and_board_roundtrips() {
     let ids: Vec<i64> = v.groups[0].tasks.iter().map(|t| t.id).collect();
     let (a, sg) = (ids[0], ids[1]); // 候选 = A、SG（B 被阻塞不展示）
     let b: i64 = conn
-        .query_row("SELECT id FROM tasks WHERE plan_id = ?1 AND name = 'B'", rusqlite::params![p], |r| r.get(0))
+        .query_row(
+            "SELECT id FROM tasks WHERE plan_id = ?1 AND name = 'B'",
+            rusqlite::params![p],
+            |r| r.get(0),
+        )
         .unwrap();
 
     AllocationService::commit(&conn, &at(2026, 8, 24, 10, 0), &[a, sg]).unwrap();
     let v = AllocationService::board(&conn, &at(2026, 8, 24, 12, 0)).unwrap();
-    assert_eq!(v.selected_task_ids, vec![a, sg], "当日任意时刻读都回显今日提交");
+    assert_eq!(
+        v.selected_task_ids,
+        vec![a, sg],
+        "当日任意时刻读都回显今日提交"
+    );
 
     AllocationService::commit(&conn, &at(2026, 8, 24, 14, 0), &[sg]).unwrap();
     let v = AllocationService::board(&conn, &at(2026, 8, 24, 15, 0)).unwrap();
-    assert_eq!(v.selected_task_ids, vec![sg], "再次提交整行覆盖（重开重选）");
+    assert_eq!(
+        v.selected_task_ids,
+        vec![sg],
+        "再次提交整行覆盖（重开重选）"
+    );
 
     // B 前置 A 未完成（面板上不可见）：直接提交被服务层拒绝，之前的分配保持不变
     assert_eq!(
@@ -126,7 +160,10 @@ fn commit_rejects_non_selectable_tasks() {
     let idle_id = id_of("A", p_idle);
 
     let clock = at(2026, 8, 24, 9, 0);
-    assert!(AllocationService::commit(&conn, &clock, &[a]).is_ok(), "可选任务正常提交");
+    assert!(
+        AllocationService::commit(&conn, &clock, &[a]).is_ok(),
+        "可选任务正常提交"
+    );
     for bad in [b, sg, idle_id, 999] {
         assert_eq!(
             AllocationService::commit(&conn, &clock, &[bad]),
@@ -138,25 +175,72 @@ fn commit_rejects_non_selectable_tasks() {
 #[test]
 fn should_auto_open_requires_workmode_workday_and_unallocated() {
     // 测试情况：2026-08-24 是周一（默认工作日周一至五）、2026-08-23 是周日；
-    //           逐一打破 工作模式 / 工作日 / 未分配 三个条件后调用判定。
+    //           逐一打破 工作模式 / 工作日 / 未分配 三个条件后调用自动检测（manual=false）。
     // 正确结果：三条件齐备才 true——休息模式 false、周日 false、已分配 false、齐备 true；
-    //           面板视图的 workday 标记随周循环翻转（周日 false、周一 true）。
+    //           面板视图的 workday 标记随周循环翻转（周日 false、周一 true）；
+    //           手动切入旁路工作日条件见 should_auto_open_manual_switch_bypasses_workday。
     let conn = db::open_in_memory().unwrap();
     let p = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &sample("判定")).unwrap();
     LifecycleService::start(&conn, p).unwrap();
     let v = AllocationService::board(&conn, &at(2026, 8, 24, 8, 0)).unwrap();
     let a = v.groups[0].tasks[0].id;
 
-    assert!(!AllocationService::should_auto_open(&conn, &at(2026, 8, 24, 8, 0), false).unwrap());
-    assert!(!AllocationService::should_auto_open(&conn, &at(2026, 8, 23, 8, 0), true).unwrap(),
-        "周日不在默认工作日");
-    assert!(!AllocationService::board(&conn, &at(2026, 8, 23, 8, 0)).unwrap().workday,
-        "周日面板视图标记非工作日（分配不加载的 UI 判据）");
-    assert!(AllocationService::should_auto_open(&conn, &at(2026, 8, 24, 8, 0), true).unwrap());
+    assert!(
+        !AllocationService::should_auto_open(&conn, &at(2026, 8, 24, 8, 0), false, false).unwrap()
+    );
+    assert!(
+        !AllocationService::should_auto_open(&conn, &at(2026, 8, 23, 8, 0), true, false).unwrap(),
+        "周日不在默认工作日"
+    );
+    assert!(
+        !AllocationService::board(&conn, &at(2026, 8, 23, 8, 0))
+            .unwrap()
+            .workday,
+        "周日面板视图标记非工作日（加班态 UI 的判据）"
+    );
+    assert!(
+        AllocationService::should_auto_open(&conn, &at(2026, 8, 24, 8, 0), true, false).unwrap()
+    );
 
     AllocationService::commit(&conn, &at(2026, 8, 24, 8, 30), &[a]).unwrap();
-    assert!(!AllocationService::should_auto_open(&conn, &at(2026, 8, 24, 9, 0), true).unwrap(),
-        "今日已分配不触发");
+    assert!(
+        !AllocationService::should_auto_open(&conn, &at(2026, 8, 24, 9, 0), true, false).unwrap(),
+        "今日已分配不触发"
+    );
+}
+
+#[test]
+fn should_auto_open_manual_switch_bypasses_workday() {
+    // 测试情况：2026-08-23 周日（默认工作日周一至五），手动切入工作模式（manual=true）。
+    // 正确结果：主动加班——休息日未分配也 true（弹大面板选任务）；休息模式或已分配
+    //           仍 false；同日自动检测（manual=false）保持 false（不打扰）。
+    let conn = db::open_in_memory().unwrap();
+    let p = PlanService::create(&conn, &at(2026, 8, 22, 9, 0), &sample("加班")).unwrap();
+    LifecycleService::start(&conn, p).unwrap();
+    let a = AllocationService::board(&conn, &at(2026, 8, 23, 8, 0))
+        .unwrap()
+        .groups[0]
+        .tasks[0]
+        .id;
+
+    assert!(
+        !AllocationService::should_auto_open(&conn, &at(2026, 8, 23, 8, 0), true, false).unwrap(),
+        "自动检测在休息日不弹"
+    );
+    assert!(
+        AllocationService::should_auto_open(&conn, &at(2026, 8, 23, 8, 0), true, true).unwrap(),
+        "手动切入工作模式 = 主动加班，休息日未分配也弹"
+    );
+    assert!(
+        !AllocationService::should_auto_open(&conn, &at(2026, 8, 23, 8, 0), false, true).unwrap(),
+        "休息模式即便手动也不弹"
+    );
+
+    AllocationService::commit(&conn, &at(2026, 8, 23, 8, 30), &[a]).unwrap();
+    assert!(
+        !AllocationService::should_auto_open(&conn, &at(2026, 8, 23, 9, 0), true, true).unwrap(),
+        "加班分配落定后不再弹"
+    );
 }
 
 #[test]
@@ -167,11 +251,17 @@ fn allocation_expires_next_day() {
     let conn = db::open_in_memory().unwrap();
     let p = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &sample("隔日")).unwrap();
     LifecycleService::start(&conn, p).unwrap();
-    let a = AllocationService::board(&conn, &at(2026, 8, 24, 8, 0)).unwrap().groups[0].tasks[0].id;
+    let a = AllocationService::board(&conn, &at(2026, 8, 24, 8, 0))
+        .unwrap()
+        .groups[0]
+        .tasks[0]
+        .id;
     AllocationService::commit(&conn, &at(2026, 8, 24, 8, 30), &[a]).unwrap();
 
     let next = AllocationService::board(&conn, &at(2026, 8, 25, 8, 0)).unwrap();
     assert_eq!(next.date, "2026-08-25");
     assert_eq!(next.selected_task_ids, Vec::<i64>::new());
-    assert!(AllocationService::should_auto_open(&conn, &at(2026, 8, 25, 8, 0), true).unwrap());
+    assert!(
+        AllocationService::should_auto_open(&conn, &at(2026, 8, 25, 8, 0), true, false).unwrap()
+    );
 }

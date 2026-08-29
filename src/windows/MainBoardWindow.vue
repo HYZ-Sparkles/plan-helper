@@ -5,12 +5,20 @@
     不阻止提交）。被依赖阻塞的任务不展示——只展示可选任务（2026-08-24 用户决策，
     原"置灰展示等待项"砍掉，解锁当日自然回到列表）。
     确认 = 持久化当日分配并隐藏窗口；重开（控制面板入口）回显旧选择可覆盖重选。
+    休息日打开 = 加班态（2026-08-29 用户决策，取代原"分配不加载"休息日空态）：
+    手动切入工作模式即可选任务提交；自动触发仍限工作日（不打扰）。
   -->
   <div class="board">
     <header class="board-header">
       <div>
         <h1 class="title">今日分配</h1>
-        <p class="hint">勾选今日要推进的任务，累计预计耗时对齐当日目标</p>
+        <p class="hint">
+          {{
+            board && !board.workday
+              ? "休息日加班：勾选要推进的任务，工时按超额并入账户"
+              : "勾选今日要推进的任务，累计预计耗时对齐当日目标"
+          }}
+        </p>
       </div>
       <p class="date">{{ dateLabel }}</p>
     </header>
@@ -18,13 +26,6 @@
     <main class="board-body">
       <p v-if="loadError" class="error">{{ loadError }}</p>
       <p v-else-if="!board" class="hint loading">加载中…</p>
-
-      <!-- 休息日：分配不加载（CONTEXT WorkingHours），临时推进照常记进度 -->
-      <div v-else-if="!board.workday" class="empty">
-        <PhMoonStars :size="28" />
-        <p class="empty-title">今日不在工作日</p>
-        <p class="hint">休息日无需分配；临时推进照常记入任务进度，工时按超额并入账户</p>
-      </div>
 
       <!-- 空态：没有进行中的计划（或全部完成等待确认） -->
       <div v-else-if="board.groups.length === 0" class="empty">
@@ -53,14 +54,18 @@
       </template>
     </main>
 
-    <footer v-if="board && board.workday && board.groups.length > 0" class="board-footer">
-      <!-- 左：状态条（固定口径"今日累计 X.X 小时 / 目标 Y 小时"）+ 进度可视化 -->
+    <footer v-if="board && board.groups.length > 0" class="board-footer">
+      <!-- 左：状态条——工作日固定口径"今日累计 X.X 小时 / 目标 Y 小时"；
+           休息日加班无目标义务，只看累计（无目标/进度条/差额提示） -->
       <div class="status">
         <p class="status-line">
           今日累计 <b>{{ hoursLabel(accumulatedMinutes) }}</b> 小时
-          <span class="status-sep">/</span> 目标 {{ hoursFromMinutes(board.target_minutes) }} 小时
+          <template v-if="board.workday">
+            <span class="status-sep">/</span> 目标 {{ hoursFromMinutes(board.target_minutes) }} 小时
+          </template>
         </p>
         <MicroBar
+          v-if="board.workday"
           class="status-bar"
           :ratio="accumulatedMinutes / board.target_minutes"
           :reached="accumulatedMinutes >= board.target_minutes"
@@ -72,8 +77,9 @@
         <PhCheck :size="16" /> 确认
       </button>
 
-      <!-- 右：差额软提示（黄色，未达标才有；超额是正常状态，无警告） / 提交错误 -->
+      <!-- 右：差额软提示（黄色，未达标才有） / 休息日加班说明 / 提交错误 -->
       <p v-if="commitError" class="error footer-note">{{ commitError }}</p>
+      <p v-else-if="!board.workday" class="footer-note overtime">休息日加班 · 推进按超额并入工时账户</p>
       <p v-else-if="shortfallMinutes > 0" class="gap footer-note">
         还差 {{ hoursLabel(shortfallMinutes) }} 小时
       </p>
@@ -89,7 +95,6 @@ import {
   PhCheck,
   PhCoffee,
   PhFlag,
-  PhMoonStars,
 } from "@phosphor-icons/vue";
 import MicroBar from "../components/MicroBar.vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
@@ -366,5 +371,10 @@ onMounted(async () => {
 /* 黄色差额软提示（未达标才有；柔性边界不阻止提交） */
 .gap {
   color: var(--color-progress);
+}
+
+/* 休息日加班说明（信息性，弱化展示；无目标义务故无差额提示） */
+.overtime {
+  color: var(--text-muted);
 }
 </style>

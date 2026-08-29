@@ -48,9 +48,9 @@
   - `waiting_on(conn, task_id) -> Vec<TaskView>` — 前置中未完成任务列表（`is_unblocked` 的数据源）
   - `is_unblocked(conn, task_id) -> bool` — 依赖就绪判定（06 大面板的候选过滤：被阻塞任务不进列表，2026-08-24 修订"只展示可选任务"）= waiting_on 为空
 - `allocation::AllocationService`（工单 06；术语 MainBoardTodayAllocation / TodayLoadCommitment / AutoOpenMainBoard）
-  - `board(conn, clock) -> Result<AllocationBoardView, PlanError>` — 大面板一次装配：候选分组（复用 `PlanService::list` 的 PlanOrdering；过滤 PlanStatus=进行中、剔除已完成任务、`is_unblocked` 依赖就绪过滤——被阻塞的不进列表）+ 今日回显（库存选中集与当前可选集求交，计划暂停等 stale 选择被剔除）+ 当日目标（暂 = 基准 `daily_minutes`，工单 10 升级为含结转并加标注）+ `workday` 周循环标记（非工作日 UI 走休息日态、分配不加载，CONTEXT WorkingHours）
+  - `board(conn, clock) -> Result<AllocationBoardView, PlanError>` — 大面板一次装配：候选分组（复用 `PlanService::list` 的 PlanOrdering；过滤 PlanStatus=进行中、剔除已完成任务、`is_unblocked` 依赖就绪过滤——被阻塞的不进列表）+ 今日回显（库存选中集与当前可选集求交，计划暂停等 stale 选择被剔除）+ 当日目标（暂 = 基准 `daily_minutes`，工单 10 升级为含结转并加标注）+ `workday` 周循环标记（非工作日 UI 走加班态——只看累计、无目标/差额提示，2026-08-29 用户决策，CONTEXT WorkingHours）
   - `commit(conn, clock, &[task_id]) -> Result<(), PlanError>` — 提交当日分配，再次提交**整行覆盖**（重开重选）；选中集必须 ⊆ 当前可选集（进行中 + 未完成 + 依赖就绪），否则 `TaskNotAllocatable{task_id}`（UI 失步的后端兜底）。存储为 `today_allocations` 单行表（id=1，date + task_ids JSON）——分配只属于它的日期，隔日读视为未分配；历史分配无消费方（总结从 ProgressLog 派生），不按日留行
-  - `should_auto_open(conn, clock, work_mode) -> Result<bool>` — AutoOpenMainBoard 判定：工作模式 && 今日在周循环工作日 && 今日未分配。**触发接线留给工单 08**（启动序列后检测 / 切入工作模式）**与 13**（工作窗口开始），工作模式状态在 08 落地
+  - `should_auto_open(conn, clock, work_mode, manual) -> Result<bool>` — AutoOpenMainBoard 判定：工作模式 && 今日未分配 &&（manual || 今日在周循环工作日）。manual = 手动切入工作模式（主动加班，2026-08-29 用户决策）旁路工作日条件；自动触发（启动序列后检测 / 13 的工作窗口开始）传 false。接线在 08 已落（启动 false / 手动切入 true）
   - `AllocationBoardView`（date / workday / target_minutes / selected_task_ids / groups）、`AllocationGroup`（plan_id / plan_name / priority / tasks）、`AllocationTask`（id / name / estimated_minutes）— serde 结构与前端 `src/lib/api.ts` 类型一一对应
 - `progress::ProgressService`（工单 07；ADR-0002/0009，术语 CurrentTask / ProgressGranularity / PercentAdjustControl / SubGoalUndo）
   - `domain::progress::round_delta_minutes(v: f64) -> f64` — 私有辅助（边界 round 到 1e-9），`report_percent` / `correct_total` 写日志前 + CurrentTaskView.completed_minutes 装配复用，消 IEEE 754 浮点尾巴；前端 `src/lib/labels.ts#hoursFromMinutes` 与 `src/lib/progress.ts#taskProgress` 各自实现对齐同一口径
@@ -67,6 +67,8 @@
   - `load(conn) -> Settings` — 读取设置；FirstRun 自动落默认值（300 分钟/天、周一至五、均分 7 工作日；窗口默认 09:00–18:00 一段）
   - `save(conn, clock, &Settings)` — 覆盖保存，updated_at 取注入时钟
   - `updated_at(conn) -> Option<DateTime<Local>>` — 最近保存时刻（SettingsEffectiveTime 依赖）
+  - `is_workday(conn, clock) -> bool` — 今日是否在周循环工作日（13 叠加日期例外）；allocation 的面板 workday 标记 / should_auto_open 共用（原 AllocationService 私有方法上移）
+  - `is_work_time(conn, clock) -> bool` — 现在是否处于工作时间：工作日 && 当前时刻在某段窗口内（端点左闭右开）；跨午夜窗口凌晨段归属窗口开始日（看昨天的星期，story 54 口径）。桌宠初始模式判定（08）与 13 的窗口触发共用
 - `settings::Settings / TimeWindow` — serde 结构，与前端 `src/lib/api.ts` 类型一一对应
 - `app_state::app_state_view(conn, clock) -> AppStateView` — 启动快照组装（示例接缝读模型）
 
@@ -81,7 +83,7 @@
 - 工单 05 生命周期：`start_plan` / `pause_plan` / `resume_plan` / `complete_plan` / `abort_plan` / `copy_plan_as_new(->新计划id)` — 前端 `src/lib/api.ts` 同名包装；状态机与校验全在 domain::lifecycle（原 `set_plan_order` 已随手动排序砍掉移除，2026-08-24）
 - 工单 06 今日分配：`get_allocation_board(-> AllocationBoardView)` / `commit_today_allocation(task_ids)` — 前端 `src/lib/api.ts` 同名包装；装配与校验全在 domain::allocation
 - 工单 07 进度汇报：`get_mini_board(-> MiniBoardView)` / `set_current_task(task_id)` / `complete_subgoal(subgoal_id)` / `undo_subgoal(subgoal_id)` / `report_percent(task_id, percent)` / `correct_total_progress(task_id, percent)` — 前端 `src/lib/api.ts` 同名包装；账本与派生全在 domain::progress；`lib.rs` 启动时已有有效当前任务则显示小看板、`position_pet_and_board` 把「桌宠+小看板」组合体锚到工作区右下角（小看板在桌宠**下方**、右对齐 40px 边距，桌宠居其上方水平居中——2026-08-24 验收要求；拖拽跟随归 09、模式显隐归 08）
-- 工单 08 桌宠：`should_auto_open_main_board(work_mode) -> bool` — AutoOpenMainBoard 判定的触发接线（06 预留；启动序列完成后 / 手动切入工作模式时由桌宠窗口调用）；`exit_app()` — 再见/托盘退出的统一通道（跳箱动画播完后由前端调用，`app.exit(0)` 关闭全部窗口）。窗口配置新增 `pet-menu`（无边框透明置顶小窗，桌宠菜单）；`control-panel` 改为启动隐藏（spec「启动序列播完直接上桌面」，入口 = 桌宠菜单/托盘）；capabilities 补 `core:window:allow-current-monitor` / `allow-scale-factor`（菜单定位与 mover 缓存用）
+- 工单 08 桌宠：`should_auto_open_main_board(work_mode, manual) -> bool` — AutoOpenMainBoard 判定的触发接线（06 预留；启动序列完成后传 manual=false、手动切入工作模式传 true=主动加班）；`is_work_time() -> bool` — 桌宠初始模式判定（启动时工作日+窗口内 = 工作模式，否则休息）；`exit_app()` — 再见/托盘退出的统一通道（跳箱动画播完后由前端调用，`app.exit(0)` 关闭全部窗口）。窗口配置新增 `pet-menu`（无边框透明置顶小窗，桌宠菜单）；`control-panel` 改为启动隐藏（spec「启动序列播完直接上桌面」，入口 = 桌宠菜单/托盘）；capabilities 补 `core:window:allow-current-monitor` / `allow-scale-factor`（菜单定位与 mover 缓存用）
 
 ## 测试先例（tests/）
 

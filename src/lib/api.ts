@@ -31,9 +31,15 @@ export function getAppState(): Promise<AppStateView> {
 
 /* ---- 桌宠（工单 08）---- */
 
-/** AutoOpenMainBoard 判定（06 预留、08 接线：启动序列完成后 / 手动切入工作模式时检测） */
-export function shouldAutoOpenMainBoard(workMode: boolean): Promise<boolean> {
-  return invoke<boolean>("should_auto_open_main_board", { workMode });
+/** 现在是否处于工作时间（工作日 + 时间窗口内）——桌宠启动时的初始模式判定 */
+export function isWorkTime(): Promise<boolean> {
+  return invoke<boolean>("is_work_time");
+}
+
+/** AutoOpenMainBoard 判定（06 预留、08 接线：启动序列完成后 / 手动切入工作模式时检测）。
+ *  manual = 手动切入工作模式（主动加班，非工作日也弹）；自动检测传 false */
+export function shouldAutoOpenMainBoard(workMode: boolean, manual: boolean): Promise<boolean> {
+  return invoke<boolean>("should_auto_open_main_board", { workMode, manual });
 }
 
 /** 再见：跳箱动画播完后退出整个应用（关闭全部窗口；托盘退出（工单 14）走同一通道） */

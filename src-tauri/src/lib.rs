@@ -60,6 +60,7 @@ pub fn run() {
             commands::report_percent,
             commands::correct_total_progress,
             commands::should_auto_open_main_board,
+            commands::is_work_time,
             commands::exit_app
         ])
         .run(tauri::generate_context!())

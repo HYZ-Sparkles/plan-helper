@@ -7,14 +7,23 @@ use crate::app_state::AppState;
 use crate::domain::allocation::{AllocationBoardView, AllocationService};
 use crate::domain::app_state::{app_state_view, AppStateView};
 use crate::domain::lifecycle::LifecycleService;
-use crate::domain::plans::{PlanDraft, PlanError, PlanService, PlanView};
+use crate::domain::plans::{db_err, PlanDraft, PlanError, PlanService, PlanView};
 use crate::domain::progress::{MiniBoardView, ProgressService};
+use crate::domain::settings::SettingsService;
 
 /// 示例接缝命令：UI → command → 领域服务 → 返回。
 #[tauri::command]
 pub fn get_app_state(state: State<'_, AppState>) -> Result<AppStateView, String> {
     let conn = state.db.lock().unwrap();
     app_state_view(&conn, state.clock.as_ref()).map_err(|e| e.to_string())
+}
+
+/// 桌宠初始模式判定：现在是否处于工作时间（工作日 + 时间窗口内）。
+/// 启动序列完成后据此进工作/休息模式；13 的日期例外与窗口触发复用同一领域判定。
+#[tauri::command]
+pub fn is_work_time(state: State<'_, AppState>) -> Result<bool, PlanError> {
+    let conn = state.db.lock().unwrap();
+    SettingsService::is_work_time(&conn, state.clock.as_ref()).map_err(db_err)
 }
 
 /// 创建计划（含任务），返回新计划 id；校验失败以 PlanError 结构化返回。
@@ -174,13 +183,15 @@ pub fn correct_total_progress(
 /* ---- 桌宠（工单 08）：薄代理，窗口/流程接线，无领域逻辑 ---- */
 
 /// AutoOpenMainBoard 判定（06 预留的触发接线：启动序列完成后 / 手动切入工作模式时检测）。
+/// manual = 手动切入工作模式（主动加班：非工作日也开面板）。
 #[tauri::command]
 pub fn should_auto_open_main_board(
     state: State<'_, AppState>,
     work_mode: bool,
+    manual: bool,
 ) -> Result<bool, PlanError> {
     let conn = state.db.lock().unwrap();
-    AllocationService::should_auto_open(&conn, state.clock.as_ref(), work_mode)
+    AllocationService::should_auto_open(&conn, state.clock.as_ref(), work_mode, manual)
 }
 
 /// 再见：跳箱动画播完后退出整个应用（关闭全部窗口；托盘退出（工单 14）走同一通道）。
