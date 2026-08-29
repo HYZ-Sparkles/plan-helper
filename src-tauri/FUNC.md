@@ -48,14 +48,15 @@
   - `waiting_on(conn, task_id) -> Vec<TaskView>` — 前置中未完成任务列表（`is_unblocked` 的数据源）
   - `is_unblocked(conn, task_id) -> bool` — 依赖就绪判定（06 大面板的候选过滤：被阻塞任务不进列表，2026-08-24 修订"只展示可选任务"）= waiting_on 为空
 - `allocation::AllocationService`（工单 06；术语 MainBoardTodayAllocation / TodayLoadCommitment / AutoOpenMainBoard）
-  - `board(conn, clock) -> Result<AllocationBoardView, PlanError>` — 大面板一次装配：候选分组（复用 `PlanService::list` 的 PlanOrdering；过滤 PlanStatus=进行中、剔除已完成任务、`is_unblocked` 依赖就绪过滤——被阻塞的不进列表）+ 今日回显（库存选中集与当前可选集求交，计划暂停等 stale 选择被剔除）+ 当日目标（暂 = 基准 `daily_minutes`，工单 10 升级为含结转并加标注）+ `workday` 周循环标记（非工作日 UI 走加班态——只看累计、无目标/差额提示，2026-08-29 用户决策，CONTEXT WorkingHours）
+  - `board(conn, clock) -> Result<AllocationBoardView, PlanError>` — 大面板一次装配：候选分组（复用 `PlanService::list` 的 PlanOrdering；过滤 PlanStatus=进行中、剔除已完成任务、`is_unblocked` 依赖就绪过滤——被阻塞的不进列表）+ 今日回显（库存选中集与当前可选集求交，计划暂停等 stale 选择被剔除）+ 当日目标（**工单 10 起含结转**：`LedgerService::day_target` 实时派生，target_minutes 为 f64 + base_minutes 供结转标注）+ `workday` 周循环标记（非工作日 UI 走加班态——只看累计、无目标/差额提示，2026-08-29 用户决策，CONTEXT WorkingHours）
   - `commit(conn, clock, &[task_id]) -> Result<(), PlanError>` — 提交当日分配，再次提交**整行覆盖**（重开重选）；选中集必须 ⊆ 当前可选集（进行中 + 未完成 + 依赖就绪），否则 `TaskNotAllocatable{task_id}`（UI 失步的后端兜底）。存储为 `today_allocations` 单行表（id=1，date + task_ids JSON）——分配只属于它的日期，隔日读视为未分配；历史分配无消费方（总结从 ProgressLog 派生），不按日留行
   - `should_auto_open(conn, clock, work_mode, manual) -> Result<bool>` — AutoOpenMainBoard 判定：工作模式 && 今日未分配 &&（manual || 今日在周循环工作日）。manual = 手动切入工作模式（主动加班，2026-08-29 用户决策）旁路工作日条件；自动触发（启动序列后检测 / 13 的工作窗口开始）传 false。接线在 08 已落（启动 false / 手动切入 true）
   - `AllocationBoardView`（date / workday / target_minutes / selected_task_ids / groups）、`AllocationGroup`（plan_id / plan_name / priority / tasks）、`AllocationTask`（id / name / estimated_minutes）— serde 结构与前端 `src/lib/api.ts` 类型一一对应
 - `progress::ProgressService`（工单 07；ADR-0002/0009，术语 CurrentTask / ProgressGranularity / PercentAdjustControl / SubGoalUndo）
-  - `domain::progress::round_delta_minutes(v: f64) -> f64` — 私有辅助（边界 round 到 1e-9），`report_percent` / `correct_total` 写日志前 + CurrentTaskView.completed_minutes 装配复用，消 IEEE 754 浮点尾巴；前端 `src/lib/labels.ts#hoursFromMinutes` 与 `src/lib/progress.ts#taskProgress` 各自实现对齐同一口径
+  - `domain::progress::round_delta_minutes(v: f64) -> f64` — pub(crate) 边界辅助（round 到 1e-9），`report_percent` / `correct_total` 写日志前 + CurrentTaskView.completed_minutes 装配 + ledger 调整后目标跨边界输出复用，消 IEEE 754 浮点尾巴；前端 `src/lib/labels.ts#hoursFromMinutes` 与 `src/lib/progress.ts#taskProgress` 各自实现对齐同一口径
   - `domain::progress::round_to_one_decimal(v: f64) -> f64` — 私有辅助（边界 round 到一位小数），CurrentTaskView.percent 装配复用，UI 展示与 ProgressGranularity 0.1% 颗粒度对齐
-  - `board(conn, clock) -> Result<MiniBoardView, PlanError>` — 小看板一次装配：当前任务（单行表 id 过三重校验：存在未删 ∧ 计划进行中 ∧ 在今日推进列表内；失效回 None、已完成仍展示为"任务完成"停留态）+ 今日完成量（`day_minutes`：全量扫 progress_log 按**事件归属日**求和，`attributed_date` 实现跨午夜窗口归前一日、窗口外归自身日期）+ 当日目标（暂 = 基准，工单 10 升级含结转）+ 更换候选分组（复用 `PlanService::list` 的 PlanOrdering，当前任务同计划提到最前）
+  - `domain::progress::attributed_date(at, windows) -> NaiveDate` — pub(crate) 事件归属日（ADR-0009 跨午夜口径：跨午夜窗口凌晨段归前一日、窗口外归自身日期），progress 今日完成量与 ledger 按日聚合共用
+  - `board(conn, clock) -> Result<MiniBoardView, PlanError>` — 小看板一次装配：当前任务（单行表 id 过三重校验：存在未删 ∧ 计划进行中 ∧ 在今日推进列表内；失效回 None、已完成仍展示为"任务完成"停留态）+ 今日完成量（`day_minutes`：ledger 的 `minutes_by_day` 按日聚合取今天一档）+ 当日目标（**工单 10 起含结转**：`LedgerService::day_target`，target f64 + base_minutes + `workday` 加班态标记）+ 更换候选分组（复用 `PlanService::list` 的 PlanOrdering，当前任务同计划提到最前）
   - `set_current_task(conn, clock, task_id)` — 指定当前任务（覆盖式单行表 current_task）；校验 ∈ 今日推进列表（TaskNotInToday）∧ 计划进行中（PlanStatusInvalid）∧ 任务未完成（ProgressLocked）
   - `complete_subgoal(conn, clock, subgoal_id) -> TaskStatus` — 按序勾选：必须是最早未完成项（乱序/重复 SubGoalOutOfOrder），落 + 分钟账（source=SubGoal），`settle_task` 首次推进转 Active + 到 100% 自动完成
   - `undo_subgoal(conn, clock, subgoal_id)` — 撤销：必须已完成（SubGoalNotCompleted）且是最晚已完成项（SubGoalOutOfOrder，保住"已完成是前缀"不变式——编辑态 update_subgoals 依赖它），落 - 分钟补偿账（source=SubGoalUndo）；已完成任务锁定（ProgressLocked）
@@ -67,9 +68,13 @@
   - `load(conn) -> Settings` — 读取设置；FirstRun 自动落默认值（300 分钟/天、周一至五、均分 7 工作日；窗口默认 09:00–18:00 一段）
   - `save(conn, clock, &Settings)` — 覆盖保存，updated_at 取注入时钟
   - `updated_at(conn) -> Option<DateTime<Local>>` — 最近保存时刻（SettingsEffectiveTime 依赖）
-  - `is_workday(conn, clock) -> bool` — 今日是否在周循环工作日（13 叠加日期例外）；allocation 的面板 workday 标记 / should_auto_open 共用（原 AllocationService 私有方法上移）
+  - `Settings::is_workday_on(date) -> bool` — 纯判定：某日期是否工作日（周循环；工单 13 日期例外只扩这一处）。ledger 按日回放与 `SettingsService::is_workday_on` 共用
+  - `SettingsService::is_workday(conn, clock) -> bool` / `is_workday_on(conn, date) -> bool` — "现在"/指定日期的工作日判定（前者 = 后者取注入时钟日期）；allocation 的面板 workday 标记 / should_auto_open / 小看板加班态共用
   - `is_work_time(conn, clock) -> bool` — 现在是否处于工作时间：工作日 && 当前时刻在某段窗口内（端点左闭右开）；跨午夜窗口凌晨段归属窗口开始日（看昨天的星期，story 54 口径）。桌宠初始模式判定（08）与 13 的窗口触发共用
 - `settings::Settings / TimeWindow` — serde 结构，与前端 `src/lib/api.ts` 类型一一对应
+- `ledger::LedgerService`（工单 10；ADR-0007 对称均分、ADR-0009 单一事实源，术语 WorkHourLedger / DailyCompletionTolerance / LoadSmoothing）
+  - `day_target(conn, clock) -> Result<DayTarget, PlanError>` — 注入时钟"今天"的**调整后目标**（DayTarget { base_minutes, target_minutes: f64 }）：从账户锚定日（最早一条进度事件的归属日；之前的日子无从谈起，之后的空闲工作日照样欠全额——债跟着走）逐日回放到昨天，滚动窗口（定长 smoothing_workdays 的 VecDeque，O(天数)）摊派各日差额到后续工作日。规则：±10% 容差带**以调整后目标为基数、对称豁免带内差额**（差几分钟的未达标与多干几分钟的超额都不入账）；带外差额 = 目标 - 实际（正上调/负下调，对称抵扣，量按 ADR"5.0+0.6"示例从目标量起算）；**只读 ProgressLog**（选择层面超额不计）；非工作日不消费窗口、不接收结转、推进全额按超额并入；历史修正后再次调用即重算（无日结冻结）。allocation / progress 两视图装配共用；11 的今日总结"目标 Y 小时"复用
+  - `ledger::minutes_by_day(conn, windows) -> Result<BTreeMap<NaiveDate, f64>, PlanError>` — pub(crate) 全量扫 progress_log 按事件归属日聚合每日完成分钟数（`attributed_date` 口径；窗口由调用方传入，与其设置读取合并免重复查询）；ledger 回放与 progress 今日完成量共用同一聚合，不建汇总表
 - `app_state::app_state_view(conn, clock) -> AppStateView` — 启动快照组装（示例接缝读模型）
 
 ## Tauri command（src/commands.rs）
@@ -82,7 +87,7 @@
 - `delete_task(task_id) -> Result<(), PlanError>` — 前端 `deleteTask`（软删除 + 解除依赖，确认弹窗在 UI）
 - 工单 05 生命周期：`start_plan` / `pause_plan` / `resume_plan` / `complete_plan` / `abort_plan` / `copy_plan_as_new(->新计划id)` — 前端 `src/lib/api.ts` 同名包装；状态机与校验全在 domain::lifecycle（原 `set_plan_order` 已随手动排序砍掉移除，2026-08-24）
 - 工单 06 今日分配：`get_allocation_board(-> AllocationBoardView)` / `commit_today_allocation(task_ids)` — 前端 `src/lib/api.ts` 同名包装；装配与校验全在 domain::allocation
-- 工单 07 进度汇报：`get_mini_board(-> MiniBoardView)` / `set_current_task(task_id)` / `complete_subgoal(subgoal_id)` / `undo_subgoal(subgoal_id)` / `report_percent(task_id, percent)` / `correct_total_progress(task_id, percent)` — 前端 `src/lib/api.ts` 同名包装；账本与派生全在 domain::progress；`lib.rs` 启动时**有有效当前任务且此刻是工作时间**（= 初始工作模式，`SettingsService::is_work_time`）才显示小看板——休息时段启动进休息模式不亮（2026-08-29 反馈，显隐跟着模式走）、`position_pet_and_board` 把「桌宠+小看板」组合体锚到工作区右下角（小看板在桌宠**下方**、右对齐 40px 边距，桌宠居其上方水平居中——2026-08-24 验收要求；拖拽刚性跟随与模式显隐归 09）
+- 工单 07 进度汇报：`get_mini_board(-> MiniBoardView)` / `set_current_task(task_id)` / `complete_subgoal(subgoal_id)` / `undo_subgoal(subgoal_id)` / `report_percent(task_id, percent)` / `correct_total_progress(task_id, percent)` — 前端 `src/lib/api.ts` 同名包装；账本与派生全在 domain::progress；`lib.rs` 启动时**有有效当前任务且此刻是工作时间**（= 初始工作模式，`SettingsService::is_work_time`）才显示小看板——休息时段启动进休息模式不亮（2026-08-29 反馈，显隐跟着模式走）、`position_pet_and_board` 把「桌宠+小看板」组合体锚到工作区右下角（小看板在桌宠**下方**、右对齐 40px 边距，桌宠居其上方水平居中——2026-08-24 验收要求；拖拽刚性跟随与模式显隐归 09）。工单 10 无新 command：两视图的 target_minutes 升级为含结转 f64 + base_minutes（+ MiniBoardView.workday），前端同步
 - 工单 08 桌宠：`should_auto_open_main_board(work_mode, manual) -> bool` — AutoOpenMainBoard 判定的触发接线（06 预留；启动序列完成后传 manual=false、手动切入工作模式传 true=主动加班）；`is_work_time() -> bool` — 桌宠初始模式判定（启动时工作日+窗口内 = 工作模式，否则休息）；`exit_app()` — 再见/托盘退出的统一通道（跳箱动画播完后由前端调用，`app.exit(0)` 关闭全部窗口）。窗口配置新增 `pet-menu`（无边框透明置顶小窗，桌宠菜单）；`control-panel` 改为启动隐藏（spec「启动序列播完直接上桌面」，入口 = 桌宠菜单/托盘）；capabilities 补 `core:window:allow-current-monitor` / `allow-scale-factor`（菜单定位与 mover 缓存用）
 
 ## 测试先例（tests/）
@@ -93,6 +98,7 @@
 - `seam_lifecycle.rs`（工单 05）— 状态机 5×4 全矩阵（合法转换落库、非法拒绝 PlanStatusInvalid 且状态不变、终态重启全拒）、不存在 id 全 NotFound、手动暂停记 UserInitiated/继续清空、完成计划前置（有未完成任务/删空拒 TasksNotCompleted，全完成后成功且终态）、任务 100% 自动完成（部分勾选不完成、全勾转已完成、幂等、无子目标不误判）、复制并新建（字段/任务/子目标/依赖边复制、进度归零、"- 副本"、直接进行中、旧计划保持终态、新计划优先级锁定、非终态拒 PlanNotTerminal）；手动排序测试已随功能砍掉移除（2026-08-24，默认排序断言在 seam_plans）
 - `seam_allocation.rs`（工单 06）— 大面板分组与依赖过滤（进行中计划才进候选、高优先在前、被阻塞任务不进列表且解锁当日回归、已完成任务剔除、子目标任务耗时=求和）、提交覆盖往返（再提交整行覆盖、被拒提交不污染已有分配）、不可选拒绝（被阻塞/已完成/非进行中/不存在 id 全 TaskNotAllocatable）、自动打开三条件（休息模式/周日/已分配都不触发、齐备才 true、workday 标记随周循环翻转）、隔日失效（8/25 回显空、判定回 true）
 - `seam_progress.rs`（工单 07）— 增量汇报与日志派生（多次 +X% 进度=求和/首报转 Active/到 100% 自动完成并锁定/停留态仍展示）、颗粒度与溢出（非 5 倍数 PercentInvalid、95%+10% 溢出拒绝、+5% 恰好补满）、**边界 round 消 IEEE 754 浮点尾巴**（反复 +0.1% 累计 current_percent = 干净 43.1 而非 43.0999999...；ProgressLog sum 接近 258.6 干净；TaskProgress::percent() 原始精度 60/140 = 42.857142857142854 不变——领域语义保护）、子目标按序（跳序/重复 SubGoalOutOfOrder、百分比通道 NotPercentTask、全勾自动完成）、撤销重算（非末尾撤销拒绝保前缀、末尾撤销今日净量实时重算、已完成任务锁定）、修正落账（设定绝对值、差额正负事件、来源序列断言、有子目标拒绝、100% 自动完成）、当前任务生命周期（不在今日列表拒/暂停回空态恢复回来/移出列表回空态/隔日失效/同计划候选排最前）、跨午夜归属（20:00–01:00 窗口凌晨段归前一日、窗口外归自身日期；注意 `SettingsService::save` 是 UPDATE-only——先 `load` 落默认行再 save，应用启动 get_app_state 已保证）
+- `seam_ledger.rs`（工单 10）— 工时账户结算：空历史=基准（大/小面板视图字段同步）、缺口按 7 工作日窗口均分（ADR"目标 5.6h（基准 5.0h + 结转 0.6h）"示例 + 第 8 工作日窗口耗尽）、±10% 容差带（4.5h 恰达标/4h 带外、基数=**调整后**目标——被上调日 300min 仍判未达标再均分；空闲工作日照样欠整日）、超额对称抵扣（384min 下调后续、324min 带内不抵扣）、多日差额滚动叠加、递归再均分（连续欠债日债滚债）、周末不消费窗口但加班推进按超额入账（跨周末逐工作日落账）、历史修正实时重算（correct_total / undo_subgoal 改口昨日→今日目标随之变）、"选 14h 推 5h"选择层面超额不计。注意：验证窗口后段时中间工作日要用**带内汇报**中和（否则空闲日的递归欠债会叠上来——那是 respread 测试的职责）；修正/撤销事件用注入时钟落在受修正日
 - 直接 `db::open_in_memory()` + `FixedClock` 驱动领域服务，断言可观察输出
 - 共用测试助手在 `tests/common/mod.rs`（`at` / `plain_task` / `draft_of` / `force_plan_status` / `force_task_status` / `force_subgoal_completed`）——各 seam 二进制 `mod common; use common::*;` 引入，不再逐文件拷贝
 - 前置状态用 SQL 直改（`force_task_status`/`force_plan_status`/`force_subgoal_completed`）：汇报与状态机接线前的种子

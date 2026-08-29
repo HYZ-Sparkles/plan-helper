@@ -4,6 +4,7 @@
 pub mod allocation;
 pub mod app_state;
 pub mod deps;
+pub mod ledger;
 pub mod lifecycle;
 pub mod plans;
 pub mod progress;

@@ -4,7 +4,8 @@
     常驻桌宠旁的置顶卡片：头部计划名 + 更换任务；主体按任务形态切换——
     有子目标 = 按序勾选（已完成行可点撤销）、无子目标 = 百分比增量控件（会话级不持久化）；
     当前任务完成后停留"任务完成"态等用户换下一个，不自动切换；
-    底部常驻今日总量微型进度条（今日推进 X / 目标 Y）。
+    底部常驻今日总量微型进度条（今日推进 X / 调整后目标 Y + 结转标注，工单 10；
+    休息日加班态无目标义务，只看累计）。
     拖拽跟随归 09、休息模式显隐归 08；关闭请求拦截为隐藏（归 14）。
   -->
   <div class="board-card">
@@ -191,15 +192,20 @@
       </template>
     </main>
 
-    <!-- 底部常驻：今日总量微型进度条（今日推进 X / 目标 Y；目标暂用基准，10 升级含结转） -->
+    <!-- 底部常驻：今日总量微型进度条（今日推进 X / 调整后目标 Y，工单 10 含结转透明标注）；
+         休息日加班无目标义务，只看累计并注明按超额并入账户 -->
     <footer class="foot">
       <p class="foot-line">
         今日
         <b>{{ hoursLabel(todayMinutes) }}</b>
-        <span class="foot-sep">/</span>
-        目标 {{ hoursLabel(targetMinutes) }} h
+        <template v-if="isWorkday">
+          <span class="foot-sep">/</span> 目标 {{ hoursLabel(targetMinutes) }} h
+        </template>
+        <span v-else class="foot-overtime">· 休息日加班并入账户</span>
       </p>
+      <p v-if="carryText" class="foot-carry">{{ carryText }}</p>
       <MicroBar
+        v-if="isWorkday"
         class="foot-bar"
         :ratio="todayMinutes / (targetMinutes || 1)"
         :reached="todayMinutes >= targetMinutes"
@@ -236,7 +242,7 @@ import {
   undoSubgoal,
   type MiniBoardView,
 } from "../lib/api";
-import { hoursFromMinutes, hoursLabel, planErrorMessage } from "../lib/labels";
+import { hoursFromMinutes, hoursLabel, carryLabel, planErrorMessage } from "../lib/labels";
 import { isValidPercentValue } from "../lib/validation";
 
 const win = getCurrentWebviewWindow();
@@ -260,6 +266,12 @@ const current = computed(() => view.value?.current ?? null);
 /** 底部今日总量（模板两处 + 进度条共用） */
 const todayMinutes = computed(() => view.value?.today_minutes ?? 0);
 const targetMinutes = computed(() => view.value?.target_minutes ?? 0);
+/** 今日是否工作日（false = 休息日加班态：无目标义务，不显示目标与进度条） */
+const isWorkday = computed(() => view.value?.workday ?? true);
+/** 结转标注（工单 10）：调整后目标 ≠ 基准时透明标出；休息日无目标义务不标 */
+const carryText = computed(() =>
+  view.value?.workday ? carryLabel(view.value.target_minutes, view.value.base_minutes) : "",
+);
 
 /** 已完成子目标（折叠展示的数据源：只展开最近一行） */
 const completedSubgoals = computed(() =>
@@ -736,6 +748,22 @@ onMounted(async () => {
 .foot-sep {
   margin: 0 2px;
   color: var(--text-muted);
+}
+
+/* 休息日加班态说明（无目标义务，推进按超额并入工时账户，工单 10） */
+.foot-overtime {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+/* 结转标注（工单 10）：目标下的透明说明小字——回答"目标怎么变了" */
+.foot-carry {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ---- 轻提示（toast） ---- */

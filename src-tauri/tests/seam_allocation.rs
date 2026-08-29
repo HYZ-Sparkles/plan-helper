@@ -58,7 +58,8 @@ fn board_groups_active_plans_selectable_only() {
 
     let v = AllocationService::board(&conn, &at(2026, 8, 24, 9, 0)).unwrap();
     assert_eq!(v.date, "2026-08-24");
-    assert_eq!(v.target_minutes, 300, "FirstRun 默认基准 5h");
+    assert_eq!(v.target_minutes, 300.0, "FirstRun 默认基准 5h（工单 10 起为 f64 调整后目标，无历史 = 基准）");
+    assert_eq!(v.base_minutes, 300);
     assert_eq!(v.selected_task_ids, Vec::<i64>::new(), "尚未分配");
     assert_eq!(v.groups.len(), 2, "未开始计划不进候选");
     assert_eq!(v.groups[0].plan_name, "高优先计划", "Priority 降序");

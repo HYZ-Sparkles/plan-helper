@@ -218,10 +218,12 @@ export interface AllocationGroup {
 export interface AllocationBoardView {
   /** 分配归属的工作日（YYYY-MM-DD） */
   date: string;
-  /** 今日是否在设置的每周工作日里（false = 休息日态，分配不加载） */
+  /** 今日是否在设置的每周工作日里（false = 休息日加班态，无目标义务） */
   workday: boolean;
-  /** 当日实际目标（分钟）。工单 06 = 基准工作时间；工单 10 升级为含结转 */
+  /** 当日实际目标（分钟，f64）：基准 + 工时账户结转（工单 10 实时派生） */
   target_minutes: number;
+  /** 基准 = 每日工作时间（分钟）：与 target 的差额即结转，状态条透明标注用 */
+  base_minutes: number;
   /** 今日已分配的选中集（重开重选回显，已与当前可选集求交） */
   selected_task_ids: number[];
   /** 候选分组：所有进行中计划（PlanOrdering 排序） */
@@ -273,8 +275,12 @@ export interface MiniBoardView {
   current: CurrentTaskView | null;
   /** 今日完成量（分钟，按工作窗口开始日归属） */
   today_minutes: number;
-  /** 当日实际目标（分钟）。工单 07 = 基准；工单 10 升级为含结转 */
+  /** 当日实际目标（分钟，f64）：基准 + 工时账户结转（工单 10 实时派生） */
   target_minutes: number;
+  /** 基准 = 每日工作时间（分钟）：与 target 的差额即结转，微型条透明标注用 */
+  base_minutes: number;
+  /** 今日是否工作日（false = 休息日加班态：无目标义务，推进按超额并入账户） */
+  workday: boolean;
   pickers: PickerGroup[];
 }
 

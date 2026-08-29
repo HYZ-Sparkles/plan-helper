@@ -4,12 +4,13 @@
 //! 以负增量补偿——账本只追加；任务进度、今日完成量全部实时派生，不固化汇总。
 //! 事件归属日按"工作窗口开始日"口径（跨午夜窗口的凌晨段归前一日）。
 
-use chrono::{DateTime, Duration, Local, Timelike};
+use chrono::{DateTime, Duration, Local, NaiveDate, Timelike};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::clock::Clock;
-use crate::domain::allocation::{today_string, AllocationService};
+use crate::domain::allocation::AllocationService;
+use crate::domain::ledger::{minutes_by_day, LedgerService};
 use crate::domain::lifecycle::LifecycleService;
 use crate::domain::plans::{
     db_err, load_subgoals, notfound_or_db, PlanError, PlanService, PlanStatus, Priority,
@@ -48,8 +49,12 @@ pub struct MiniBoardView {
     pub current: Option<CurrentTaskView>,
     /// 今日完成量（分钟，事件按工作窗口开始日归属后求和）
     pub today_minutes: f64,
-    /// 当日实际目标（分钟）。工单 07 = 基准工作时间；工单 10 升级为含结转
-    pub target_minutes: u32,
+    /// 当日实际目标（分钟，f64）：基准 + 工时账户结转（工单 10，LedgerService 派生）
+    pub target_minutes: f64,
+    /// 基准 = 每日工作时间（分钟）：与 target 的差额即结转，微型条透明标注用
+    pub base_minutes: u32,
+    /// 今日是否工作日（false = 休息日加班态：无目标义务，推进按超额并入账户）
+    pub workday: bool,
     /// 「更换任务」候选：今日推进列表分组（当前任务同计划排最前，组内按顺序）
     pub pickers: Vec<PickerGroup>,
 }
@@ -105,13 +110,17 @@ pub struct PickerTask {
 pub struct ProgressService;
 
 impl ProgressService {
-    /// 装配小看板视图：当前任务（失效即 None）+ 今日完成量 + 当日目标 + 更换候选。
+    /// 装配小看板视图：当前任务（失效即 None）+ 今日完成量 + 调整后目标（工单 10 含结转）
+    /// + 工作日标记（休息日加班态）+ 更换候选。
     pub fn board(conn: &Connection, clock: &dyn Clock) -> Result<MiniBoardView, PlanError> {
         let current = Self::current_view(conn, clock)?;
+        let target = LedgerService::day_target(conn, clock)?;
         Ok(MiniBoardView {
             pickers: Self::picker_groups(conn, clock, current.as_ref().map(|c| c.plan_id))?,
-            today_minutes: Self::day_minutes(conn, &today_string(clock))?,
-            target_minutes: SettingsService::load(conn).map_err(db_err)?.daily_minutes,
+            today_minutes: Self::day_minutes(conn, clock)?,
+            target_minutes: target.target_minutes,
+            base_minutes: target.base_minutes,
+            workday: SettingsService::is_workday(conn, clock).map_err(db_err)?,
             current,
         })
     }
@@ -368,25 +377,14 @@ impl ProgressService {
         Ok(groups)
     }
 
-    /// 某个工作日的完成量（分钟）：全量扫日志按事件归属日过滤求和。
+    /// 某个工作日的完成量（分钟）：ledger 的按日聚合（`minutes_by_day`）取"今天"一档。
     /// 日志量级是每日几十条，实时派生不建汇总表（ADR-0009）。
-    fn day_minutes(conn: &Connection, date: &str) -> Result<f64, PlanError> {
+    fn day_minutes(conn: &Connection, clock: &dyn Clock) -> Result<f64, PlanError> {
         let windows = SettingsService::load(conn).map_err(db_err)?.time_windows;
-        let mut stmt = conn
-            .prepare("SELECT at, delta_minutes FROM progress_log")
-            .map_err(db_err)?;
-        let rows = stmt
-            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?)))
-            .map_err(db_err)?
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .map_err(db_err)?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|(raw, delta)| {
-                let at = DateTime::parse_from_rfc3339(&raw).ok()?.with_timezone(&Local);
-                (attributed_date(at, &windows) == date).then_some(delta)
-            })
-            .sum())
+        Ok(minutes_by_day(conn, &windows)?
+            .get(&clock.now().date_naive())
+            .copied()
+            .unwrap_or(0.0))
     }
 }
 
@@ -469,9 +467,9 @@ fn valid_percent(p: f64, min: f64) -> bool {
 
 /// delta 分钟边界 round：消 IEEE 754 浮点尾巴（percent × total / 100 不可精确表示），
 /// round 到 1e-9（f64 安全精度），防止多次 0.1% 累加污染 ProgressLog 求和与 UI 展示。
-/// 复用点：`report_percent` / `correct_total` 写日志前、CurrentTaskView.completed_minutes 装配；
-/// 测试 seam_progress::progress_percent_rounds_to_one_decimal。
-fn round_delta_minutes(v: f64) -> f64 {
+/// 复用点：`report_percent` / `correct_total` 写日志前、CurrentTaskView.completed_minutes 装配、
+/// ledger 调整后目标跨边界输出；测试 seam_progress::progress_percent_rounds_to_one_decimal。
+pub(crate) fn round_delta_minutes(v: f64) -> f64 {
     (v * 1e9).round() / 1e9
 }
 
@@ -527,18 +525,19 @@ fn exists(
 /// 事件时刻归属的工作窗口开始日（ADR-0009 跨午夜口径）：找到包含该时刻的窗口，
 /// 跨午夜窗口的 [00:00, end) 段归前一日；不在任何窗口内 → 归属自身日期
 /// （非工作日 / 窗口外的推进照常记账，CONTEXT WorkingHours）。
-fn attributed_date(at: DateTime<Local>, windows: &[TimeWindow]) -> String {
+/// ledger 的按日聚合（`minutes_by_day`）共用同一归属口径。
+pub(crate) fn attributed_date(at: DateTime<Local>, windows: &[TimeWindow]) -> NaiveDate {
     let t = (at.hour() * 60 + at.minute()) as u16;
     for w in windows {
         if w.start_minute <= w.end_minute {
             if t >= w.start_minute && t < w.end_minute {
-                return at.format("%Y-%m-%d").to_string();
+                return at.date_naive();
             }
         } else if t >= w.start_minute {
-            return at.format("%Y-%m-%d").to_string();
+            return at.date_naive();
         } else if t < w.end_minute {
-            return (at - Duration::days(1)).format("%Y-%m-%d").to_string();
+            return (at - Duration::days(1)).date_naive();
         }
     }
-    at.format("%Y-%m-%d").to_string()
+    at.date_naive()
 }

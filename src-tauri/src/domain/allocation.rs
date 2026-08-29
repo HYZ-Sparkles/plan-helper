@@ -11,6 +11,7 @@ use serde::Serialize;
 
 use crate::clock::Clock;
 use crate::domain::deps::DependencyService;
+use crate::domain::ledger::LedgerService;
 use crate::domain::plans::{db_err, PlanError, PlanService, PlanStatus, Priority, TaskStatus};
 use crate::domain::settings::SettingsService;
 
@@ -21,8 +22,10 @@ pub struct AllocationBoardView {
     pub date: String,
     /// 今日是否在设置的每周工作日里（CONTEXT WorkingHours：非工作日分配不加载，UI 显示休息日态）
     pub workday: bool,
-    /// 当日实际目标（分钟）。工单 06 = 基准工作时间；工单 10 升级为含结转的调整后目标并加标注
-    pub target_minutes: u32,
+    /// 当日实际目标（分钟，f64）：基准 + 工时账户结转（工单 10，LedgerService 派生）
+    pub target_minutes: f64,
+    /// 基准 = 每日工作时间（分钟）：与 target 的差额即结转，状态条透明标注用
+    pub base_minutes: u32,
     /// 今日已分配的选中集（与当前可选任务取交集后的回显集——计划暂停等 stale 选择被剔除）
     pub selected_task_ids: Vec<i64>,
     /// 候选分组：所有进行中计划，PlanOrdering 默认排序（Priority 降序 + 创建倒序）
@@ -52,14 +55,16 @@ pub struct AllocationTask {
 pub struct AllocationService;
 
 impl AllocationService {
-    /// 装配大面板视图：候选分组（依赖过滤）+ 今日回显 + 当日目标（基准工作时间）。
+    /// 装配大面板视图：候选分组（依赖过滤）+ 今日回显 + 调整后目标（工单 10 含结转）。
     pub fn board(conn: &Connection, clock: &dyn Clock) -> Result<AllocationBoardView, PlanError> {
         let groups = Self::candidates(conn)?;
         let selectable = selectable_of(&groups);
+        let target = LedgerService::day_target(conn, clock)?;
         Ok(AllocationBoardView {
             date: today_string(clock),
             workday: SettingsService::is_workday(conn, clock).map_err(db_err)?,
-            target_minutes: SettingsService::load(conn).map_err(db_err)?.daily_minutes,
+            target_minutes: target.target_minutes,
+            base_minutes: target.base_minutes,
             selected_task_ids: Self::stored_selection(conn, clock)?
                 .into_iter()
                 .filter(|id| selectable.contains(id))

@@ -7,6 +7,7 @@
     确认 = 持久化当日分配并隐藏窗口；重开（控制面板入口）回显旧选择可覆盖重选。
     休息日打开 = 加班态（2026-08-29 用户决策，取代原"分配不加载"休息日空态）：
     手动切入工作模式即可选任务提交；自动触发仍限工作日（不打扰）。
+    当日目标 = 基准 + 工时账户结转（工单 10 实时派生），状态条透明标注。
   -->
   <div class="board">
     <header class="board-header">
@@ -55,13 +56,15 @@
     </main>
 
     <footer v-if="board && board.groups.length > 0" class="board-footer">
-      <!-- 左：状态条——工作日固定口径"今日累计 X.X 小时 / 目标 Y 小时"；
+      <!-- 左：状态条——工作日固定口径"今日累计 X.X 小时 / 目标 Y 小时"并透明标注结转
+           （工单 10："目标 5.6h（基准 5.0h + 结转 0.6h）"，无结转不加标注）；
            休息日加班无目标义务，只看累计（无目标/进度条/差额提示） -->
       <div class="status">
         <p class="status-line">
           今日累计 <b>{{ hoursLabel(accumulatedMinutes) }}</b> 小时
           <template v-if="board.workday">
-            <span class="status-sep">/</span> 目标 {{ hoursFromMinutes(board.target_minutes) }} 小时
+            <span class="status-sep">/</span> 目标 {{ hoursLabel(board.target_minutes) }} 小时
+            <span v-if="carryText" class="carry-note">（{{ carryText }}）</span>
           </template>
         </p>
         <MicroBar
@@ -104,7 +107,7 @@ import {
   type AllocationBoardView,
   type PlanErrorShape,
 } from "../lib/api";
-import { hoursFromMinutes, hoursLabel, planErrorMessage } from "../lib/labels";
+import { hoursFromMinutes, hoursLabel, carryLabel, planErrorMessage } from "../lib/labels";
 
 const win = getCurrentWebviewWindow();
 const board = ref<AllocationBoardView | null>(null);
@@ -127,6 +130,12 @@ const accumulatedMinutes = computed(() =>
 const shortfallMinutes = computed(() => {
   const target = board.value?.target_minutes ?? 0;
   return Math.max(0, target - accumulatedMinutes.value);
+});
+
+/** 结转标注（工单 10）：调整后目标 ≠ 基准时透明标出"基准 X + 结转 Y"；无结转为空串 */
+const carryText = computed(() => {
+  const b = board.value;
+  return b ? carryLabel(b.target_minutes, b.base_minutes) : "";
 });
 
 /** 日期文案（"8月24日 星期一"）——从服务端给的归属日解析，避免本地时区漂移 */
@@ -351,6 +360,12 @@ onMounted(async () => {
 .status-sep {
   margin: 0 2px;
   color: var(--text-muted);
+}
+
+/* 结转标注（工单 10）：目标旁的透明说明，弱化展示——回答"目标怎么变了" */
+.carry-note {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 /* 微型进度条（组件本体在 MicroBar，这里只定宽） */

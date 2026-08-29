@@ -3,7 +3,7 @@
 //! 三者同时是全局兜底值。时间窗口默认给一整段常规工作时段（09:00–18:00），
 //! 仅作为占位默认，设置页（工单 13）可改。
 
-use chrono::{DateTime, Datelike, Local, Timelike};
+use chrono::{DateTime, Datelike, Local, NaiveDate, Timelike};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
@@ -44,16 +44,29 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    /// 某日期是否工作日（纯判定：周循环；日期例外叠加在工单 13，届时只扩这一处）。
+    /// 工时域按日回放共用（ledger 的均分窗口枚举）。
+    pub fn is_workday_on(&self, date: NaiveDate) -> bool {
+        // chrono 周一 = 1 .. 周日 = 7，与 workdays 口径一致
+        self.workdays.contains(&(date.weekday().number_from_monday() as u8))
+    }
+}
+
 /// 设置读写服务。`load` 保证 FirstRun 默认值落库（INSERT OR IGNORE 幂等）。
 pub struct SettingsService;
 
 impl SettingsService {
-    /// 今日是否在每周工作日里（周循环；日期例外叠加在工单 13）。
+    /// 今日是否在每周工作日里（`is_workday_on` 的"现在"快捷方式）。
     /// 工时域共用判定（allocation 的面板 workday 标记 / should_auto_open）。
     pub fn is_workday(conn: &Connection, clock: &dyn Clock) -> rusqlite::Result<bool> {
-        let workdays = Self::load(conn)?.workdays;
-        // chrono 周一 = 1 .. 周日 = 7，与 settings.workdays 口径一致
-        Ok(workdays.contains(&(clock.now().weekday().number_from_monday() as u8)))
+        Ok(Self::load(conn)?.is_workday_on(clock.now().date_naive()))
+    }
+
+    /// 指定日期是否工作日（工单 10 ledger 按日回放；工单 13 的日期例外将并入
+    /// `Settings::is_workday_on` 纯判定）。
+    pub fn is_workday_on(conn: &Connection, date: NaiveDate) -> rusqlite::Result<bool> {
+        Ok(Self::load(conn)?.is_workday_on(date))
     }
 
     /// 现在是否处于工作时间：工作日 && 当前时刻落在某段时间窗口内。

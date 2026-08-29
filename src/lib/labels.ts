@@ -107,3 +107,16 @@ export function hoursFromMinutes(minutes: number): string {
 export function hoursLabel(minutes: number): string {
   return (minutes / 60).toFixed(1);
 }
+
+/**
+ * 工时账户结转标注（工单 10 透明显示，ADR-0007）：调整后目标与基准的差额文案，
+ * 返回如 "基准 5.0h + 结转 0.6h" / "基准 5.0h + 结转 -0.4h"（负结转 = 超额抵扣后的轻松日）。
+ * 两个数值都先 round 到一位小数再相减——保证 "标注两数之和 === 展示目标" 永不自相矛盾；
+ * 差额 round 后为 0（无结转）返回空串，不添噪声。大面板状态条与小看板微型条共用。
+ */
+export function carryLabel(targetMinutes: number, baseMinutes: number): string {
+  const target = Math.round((targetMinutes / 60) * 10) / 10;
+  const base = Math.round((baseMinutes / 60) * 10) / 10;
+  const carry = Math.round((target - base) * 10) / 10;
+  return carry === 0 ? "" : `基准 ${base.toFixed(1)}h + 结转 ${carry}h`;
+}

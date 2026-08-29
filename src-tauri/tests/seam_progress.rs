@@ -339,7 +339,7 @@ fn current_task_requires_today_list_and_follows_validity() {
     let v = ProgressService::board(&conn, &at(2026, 8, 24, 10, 0)).unwrap();
     let cur = v.current.as_ref().unwrap();
     assert_eq!((cur.task_id, cur.plan_name.as_str(), cur.task_name.as_str()), (t_mid, "中计划", "中任务"));
-    assert_eq!(v.target_minutes, 300, "目标暂用基准（10 升级含结转）");
+    assert_eq!(v.target_minutes, 300.0, "无账户历史 = 目标为基准（工单 10 起含结转派生，f64）");
     assert_eq!(
         v.pickers.iter().map(|g| g.plan_name.as_str()).collect::<Vec<_>>(),
         vec!["中计划", "高计划"],
