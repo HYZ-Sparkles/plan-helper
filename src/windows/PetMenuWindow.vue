@@ -10,7 +10,7 @@
 import { computed, onMounted, ref } from "vue";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { PhMouseSimple, PhSlidersHorizontal, PhCoffee, PhBriefcase, PhHandWaving } from "@phosphor-icons/vue";
+import { PhSlidersHorizontal, PhCoffee, PhBriefcase, PhHandWaving } from "@phosphor-icons/vue";
 import {
   MENU_ACTION_EVENT,
   MENU_CLOSE_EVENT,
@@ -42,13 +42,14 @@ const items = computed(() => [
   { action: "goodbye" as MenuAction, icon: PhHandWaving, label: "再见" },
 ]);
 
-/** 气泡形态：亮文案 + 计时自动收起（收起不回 MENU_CLOSED——桌宠不追踪气泡状态） */
+/** 气泡形态：亮文案 + 计时自动收起。**先藏窗再清形态**——否则 v-else 会在窗口可见的
+ *  最后一瞬闪出菜单卡（2026-08-30 用户实测的"消失后闪现菜单"）；收起不回 MENU_CLOSED */
 function flashHint() {
   hint.value = "右键才是菜单喵";
   clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => {
+  hintTimer = setTimeout(async () => {
+    await win.hide();
     hint.value = "";
-    void win.hide();
   }, HINT_AUTO_HIDE_MS);
 }
 
@@ -70,17 +71,20 @@ onMounted(async () => {
     e.preventDefault();
     await hide();
   });
-  // 失焦即关：点击桌面/其它窗口 = 收起菜单（tauri://blur 是窗口级事件）
+  // 失焦即关：点击桌面/其它窗口 = 收起浮层（tauri://blur 是窗口级事件）。
+  // 只有**菜单形态**的失焦才回 MENU_CLOSED（桌宠盖 menuClosedAt 防抖戳）；气泡失焦不盖
+  // ——否则"气泡开着时右键"会被 400ms 防抖吞掉，气泡无法流畅切换成菜单（2026-08-30 反馈）
   await win.listen("tauri://blur", async () => {
+    const wasMenu = hint.value === "";
     await hide();
-    await emitTo("pet", MENU_CLOSED_EVENT);
+    if (wasMenu) await emitTo("pet", MENU_CLOSED_EVENT);
   });
 });
 
 async function hide() {
   clearTimeout(hintTimer);
+  await win.hide(); // 同气泡计时：先藏窗再清形态，避免菜单卡闪现
   hint.value = "";
-  await win.hide();
 }
 
 /** 菜单项点击：通知桌宠窗口执行并自隐藏 */
@@ -95,7 +99,6 @@ async function choose(action: MenuAction) {
   <!-- 气泡形态贴窗底（离桌宠最近）；菜单形态保持原位（窗顶） -->
   <div class="float-root" :class="{ bottom: hint }">
     <div v-if="hint" class="hint-bubble">
-      <PhMouseSimple :size="15" />
       <span>{{ hint }}</span>
     </div>
     <div v-else class="menu-card">
