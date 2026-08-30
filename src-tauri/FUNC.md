@@ -31,17 +31,17 @@
   - `task_progress(conn, task_id) -> Result<TaskProgress, PlanError>`（工单 04/07）— 派生进度（ADR-0002）：(已完成分钟: **f64**, 总分钟)，`percent()` 供展示（**保持原始 f64 精度**——这是领域语义值，"分子不变分母变"缩放后 60/140 = 42.857142857142854 必须如实保留）、`is_complete()`（epsilon 容差）供自动完成判定；改耗时/增删未完成子目标后自动缩放（分子不变分母变）；有子目标 = 已完成子目标求和，无子目标 = progress_log 增量求和；存储层 ProgressLog 写入时 round delta 到 1e-9（边界消 IEEE 754 浮点尾巴，不破坏领域语义），跨边界输出（CurrentTaskView.percent / completed_minutes）时 round 1e-1 / 1e-9（消 UI 浮点尾巴）
   - `TaskView.progress_percent` — 派生进度百分比（load_tasks 装配，列表/详情/小看板候选统一消费）
   - `PlanDraft` / `TaskDraft`（含 `subgoals`、`depends_on` 草稿下标引用）/ `SubGoalDraft` — 创建与编辑共用草稿（id 为 None = 新行）
-  - `PlanError` — 结构化领域错误（serde tag=kind/content=payload），前端文案见 `src/lib/labels.ts#planErrorMessage`；工单 05 新增 PlanStatusInvalid{from} / PlanNotTerminal{from} / TasksNotCompleted，工单 06 新增 TaskNotAllocatable{task_id}，工单 07 新增 TaskNotInToday{task_id} / SubGoalOutOfOrder / SubGoalNotCompleted / ProgressLocked / PercentInvalid / PercentOverflow / NotPercentTask，工单 11 新增 InvalidDate（总结 command 边界的日期解析，`summary::parse_date`）
+  - `PlanError` — 结构化领域错误（serde tag=kind/content=payload），前端文案见 `src/lib/labels.ts#planErrorMessage`；工单 05 新增 PlanStatusInvalid{from} / PlanNotTerminal{from} / TasksNotCompleted，工单 06 新增 TaskNotAllocatable{task_id}，工单 07 新增 TaskNotInToday{task_id} / SubGoalOutOfOrder / SubGoalNotCompleted / ProgressLocked / PercentInvalid / PercentOverflow / NotPercentTask，工单 11 新增 InvalidDate（总结 command 边界的日期解析，`summary::parse_date`），工单 12 新增 PreemptedByHigher{plan_name}（抢占不变式的开始约束，plan_name 供 tooltip/文案）
   - `Priority` / `PlanStatus` / `TaskStatus` — 枚举 + `as_db`/`from_db` TEXT 往返；Priority 派生 Ord（Low < Medium < High）
-- `lifecycle::LifecycleService`（工单 05；ADR-0001 单向瀑布）
-  - `start(conn, plan_id)` — 未开始 → 进行中
-  - `pause(conn, plan_id)` — 进行中 → 已暂停，pause_reason = PauseReason::UserInitiated（CONTEXT PauseReason 二值枚举，as_db/from_db 口径同 PlanStatus；AutoPreempted 由工单 12 抢占写入）
-  - `resume(conn, plan_id)` — 已暂停 → 进行中，清空 pause_reason
-  - `complete(conn, plan_id)` — 进行中 → 已完成（PlanCompletionConfirm 手动确认）；要求全部任务已完成且 ≥1 个任务（删空计划只能放弃），否则 TasksNotCompleted
-  - `abort(conn, plan_id)` — 进行中/已暂停 → 已放弃（终态；二级确认在 UI）
+- `lifecycle::LifecycleService`（工单 05；ADR-0001 单向瀑布；工单 12 接入 ADR-0006 抢占不变式——任何时刻进行中的计划必然同等级）
+  - `start(conn, plan_id) -> Result<LifecycleOutcome, PlanError>` — 未开始 → 进行中；存在进行中的更高等级计划时拒绝 `PreemptedByHigher{plan_name}`（想开低等级先完成/手动暂停高等级），成功则自动暂停所有进行中的低等级计划并随结果返回（AutoPauseFeedback 数据源）
+  - `pause(conn, plan_id)` — 进行中 → 已暂停，pause_reason = PauseReason::UserInitiated（CONTEXT PauseReason 二值枚举，as_db/from_db 口径同 PlanStatus）；手动暂停使高等级清空 → 触发逐层恢复
+  - `resume(conn, plan_id) -> Result<LifecycleOutcome, PlanError>` — 已暂停 → 进行中，清空 pause_reason；抢占约束同 start（恢复的高等级再遇低等级进行中 → 再次抢占，原因仍记自动抢占）
+  - `complete(conn, plan_id)` — 进行中 → 已完成（PlanCompletionConfirm 手动确认）；要求全部任务已完成且 ≥1 个任务（删空计划只能放弃），否则 TasksNotCompleted；完成使高等级清空 → 触发逐层恢复
+  - `abort(conn, plan_id)` — 进行中/已暂停 → 已放弃（终态；二级确认在 UI）；放弃进行中的高等级同样触发逐层恢复
   - `sync_task_completion(conn, task_id) -> Result<TaskStatus, PlanError>` — 任务进度到 100% 自动转已完成（幂等；用 `TaskProgress::is_complete` 的 epsilon 判定）；工单 07 的汇报路径已接线（`progress::settle_task` 在每次落账后调用）
-  - `copy_as_new(conn, clock, plan_id) -> Result<i64, PlanError>` — 终态计划复制并新建（CopyAsNewPlan）：复制字段/任务/子目标/依赖边、进度归零、名称加"- 副本"、直接进行中；非终态拒绝 PlanNotTerminal
-  - 抢占不变式（开始/恢复时自动暂停低等级计划）在工单 12 接入本服务各入口
+  - `copy_as_new(conn, clock, plan_id) -> Result<CopyAsNewOutcome, PlanError>` — 终态计划复制并新建（CopyAsNewPlan）：复制字段/任务/子目标/依赖边、进度归零、名称加"- 副本"、直接进行中；非终态拒绝 PlanNotTerminal；复制即开始 → 抢占约束与自动暂停同 start
+  - 抢占内部件（私有；优先级比较在 Rust 侧——priority 是 TEXT 列，SQL 字典序 High<Low<Medium 与语义序 Low<Medium<High 不同）：`plan_priority` / `ensure_no_higher_active`（开始约束，同等级并行不受限）/ `preempt_lower_tiers`（自动暂停，只针对进行中，未开始不受影响）/ `auto_resume_top_tier`（逐层恢复：完成/放弃/手动暂停使高等级清空后，恢复等级最高的"自动抢占"组——整组、只恢复 AutoPreempted（用户主动暂停永不自动恢复）、单次只恢复一组，恢复组自身成为更低组面前的"进行中更高等级"）。输出结构 `LifecycleOutcome{paused}` / `CopyAsNewOutcome{new_plan_id, paused}` / `PreemptedPlan{id, name}`
 - `deps::DependencyService`（工单 04）
   - `link(conn, predecessor_id, successor_id) -> Result<(), PlanError>` — 建一条 A→B 边：校验两端存在未删、同计划（DependencyCrossPlan）、不自指、无环（reaches 可达检测，环返回 DependencyCycle）；可事务内调用；草稿路径由 `link_draft_deps` 批量走它
   - `detach_task(conn, task_id)` — 删除任务时双向解除其边
@@ -51,7 +51,7 @@
   - `board(conn, clock) -> Result<AllocationBoardView, PlanError>` — 大面板一次装配：候选分组（复用 `PlanService::list` 的 PlanOrdering；过滤 PlanStatus=进行中、剔除已完成任务、`is_unblocked` 依赖就绪过滤——被阻塞的不进列表）+ 今日回显（库存选中集与当前可选集求交，计划暂停等 stale 选择被剔除）+ 当日目标（**工单 10 起含结转**：`LedgerService::day_target` 实时派生，target_minutes 为 f64 + base_minutes 供结转标注）+ `workday` 周循环标记（非工作日 UI 走加班态——只看累计、无目标/差额提示，2026-08-29 用户决策，CONTEXT WorkingHours）
   - `commit(conn, clock, &[task_id]) -> Result<(), PlanError>` — 提交当日分配，再次提交**整行覆盖**（重开重选）；选中集必须 ⊆ 当前可选集（进行中 + 未完成 + 依赖就绪），否则 `TaskNotAllocatable{task_id}`（UI 失步的后端兜底）。存储为 `today_allocations` 单行表（id=1，date + task_ids JSON）——分配只属于它的日期，隔日读视为未分配；历史分配无消费方（总结从 ProgressLog 派生），不按日留行
   - `should_auto_open(conn, clock, work_mode, manual) -> Result<bool>` — AutoOpenMainBoard 判定：工作模式 && 今日未分配 &&（manual || 今日在周循环工作日）。manual = 手动切入工作模式（主动加班，2026-08-29 用户决策）旁路工作日条件；自动触发（启动序列后检测 / 13 的工作窗口开始）传 false。接线在 08 已落（启动 false / 手动切入 true）
-  - `AllocationBoardView`（date / workday / target_minutes / selected_task_ids / groups）、`AllocationGroup`（plan_id / plan_name / priority / tasks）、`AllocationTask`（id / name / estimated_minutes）— serde 结构与前端 `src/lib/api.ts` 类型一一对应
+  - `AllocationBoardView`（date / workday / target_minutes / selected_task_ids / groups / **paused_groups**——工单 12：被抢占暂停的分组，`preempted_groups` 装配，只含 AutoPreempted，灰显不可选的 AutoPauseFeedback 数据源）、`AllocationGroup`（plan_id / plan_name / priority / tasks）、`AllocationTask`（id / name / estimated_minutes）— serde 结构与前端 `src/lib/api.ts` 类型一一对应
 - `progress::ProgressService`（工单 07；ADR-0002/0009，术语 CurrentTask / ProgressGranularity / PercentAdjustControl / SubGoalUndo）
   - `domain::progress::round_delta_minutes(v: f64) -> f64` — pub(crate) 边界辅助（round 到 1e-9），`report_percent` / `correct_total` 写日志前 + CurrentTaskView.completed_minutes 装配 + ledger 调整后目标跨边界输出复用，消 IEEE 754 浮点尾巴；前端 `src/lib/labels.ts#hoursFromMinutes` 与 `src/lib/progress.ts#taskProgress` 各自实现对齐同一口径
   - `domain::progress::round_to_one_decimal(v: f64) -> f64` — pub(crate) 辅助（边界 round 到一位小数），CurrentTaskView.percent 与 summary 的 SummaryTask.percent（工单 11）装配复用，UI 展示与 ProgressGranularity 0.1% 颗粒度对齐

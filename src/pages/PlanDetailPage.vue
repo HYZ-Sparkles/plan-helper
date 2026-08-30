@@ -31,17 +31,20 @@
         <div class="header-actions">
           <!-- 生命周期操作矩阵（ADR-0001）：
                未开始 → 开始；进行中 → 完成计划(任务全完成后亮起)/暂停/放弃；
-               已暂停 → 继续/放弃；终态 → 复制并新建（唯一重启路径，无"重新开始"） -->
+               已暂停 → 继续/放弃；终态 → 复制并新建（唯一重启路径，无"重新开始"）。
+               抢占不变式（工单 12）：存在进行中的更高优先级计划时，开始/继续/复制
+               （复制即开始）禁用——外层 span 承载 tooltip（disabled 按钮本身不冒泡 hover） -->
           <div v-if="!editing" class="lifecycle">
-            <button
-              v-if="plan.status === 'NotStarted'"
-              type="button"
-              class="primary-btn"
-              :disabled="busy"
-              @click="runLifecycle(() => startPlan(plan!.id))"
-            >
-              <PhPlay :size="16" /> 开始
-            </button>
+            <span v-if="plan.status === 'NotStarted'" :title="lifecycleBlockedTitle">
+              <button
+                type="button"
+                class="primary-btn"
+                :disabled="busy || !!higherActive"
+                @click="runLifecycle(() => startPlan(plan!.id))"
+              >
+                <PhPlay :size="16" /> 开始
+              </button>
+            </span>
             <template v-else-if="plan.status === 'Active'">
               <button
                 v-if="allTasksDone"
@@ -70,14 +73,16 @@
               </button>
             </template>
             <template v-else-if="plan.status === 'Paused'">
-              <button
-                type="button"
-                class="primary-btn"
-                :disabled="busy"
-                @click="runLifecycle(() => resumePlan(plan!.id))"
-              >
-                <PhPlay :size="16" /> 继续
-              </button>
+              <span :title="lifecycleBlockedTitle">
+                <button
+                  type="button"
+                  class="primary-btn"
+                  :disabled="busy || !!higherActive"
+                  @click="runLifecycle(() => resumePlan(plan!.id), {}, '继续')"
+                >
+                  <PhPlay :size="16" /> 继续
+                </button>
+              </span>
               <button
                 type="button"
                 class="danger-ghost-btn"
@@ -87,15 +92,16 @@
                 <PhXCircle :size="16" /> 放弃
               </button>
             </template>
-            <button
-              v-else
-              type="button"
-              class="primary-btn"
-              :disabled="busy"
-              @click="runLifecycle(copyAsNew)"
-            >
-              <PhCopySimple :size="16" /> 复制并新建
-            </button>
+            <span v-else :title="lifecycleBlockedTitle">
+              <button
+                type="button"
+                class="primary-btn"
+                :disabled="busy || !!higherActive"
+                @click="runLifecycle(copyAsNew, {}, '复制新建')"
+              >
+                <PhCopySimple :size="16" /> 复制并新建
+              </button>
+            </span>
           </div>
           <button v-if="!editing" type="button" class="ghost-btn" :disabled="busy" @click="editing = true">
             <PhPencilSimple :size="16" /> 编辑
@@ -104,6 +110,11 @@
       </header>
 
       <p v-if="serverError" class="server-error">{{ serverError }}</p>
+
+      <!-- 自动暂停反馈（AutoPauseFeedback 第二层，工单 12）：抢占发生时在触发地即时透出 -->
+      <div v-if="preemptNotice.length > 0" class="preempt-notice">
+        <p v-for="line in preemptNotice" :key="line">{{ line }}</p>
+      </div>
 
       <!-- 查看态正文：计划字段 + 任务列表。空字段整行隐藏、简述与名称相同也不重复显示 -->
       <div v-if="!editing" class="detail-body">
@@ -263,20 +274,26 @@ import {
   copyPlanAsNew,
   correctTotalProgress,
   getPlan,
+  listPlans,
   pausePlan,
   resumePlan,
   startPlan,
+  type LifecycleOutcome,
   type PlanView,
+  type Priority,
   type TaskView,
 } from "../lib/api";
 import { hoursFromMinutes, pauseReasonLabel, planErrorMessage } from "../lib/labels";
 import { taskProgress, taskProgressLabel } from "../lib/progress";
 import { isValidPercentValue } from "../lib/validation";
+import { MAIN_BOARD_REFRESH_EVENT, MINI_BOARD_REFRESH_EVENT } from "../lib/events";
 import { SUMMARY_REFRESH_EVENT } from "../lib/summary";
 
 const route = useRoute();
 const router = useRouter();
 const plan = ref<PlanView | null>(null);
+/** 全部计划（抢占不变式的 UI 判定数据源：查存在进行中的更高优先级计划） */
+const allPlans = ref<PlanView[]>([]);
 const loadError = ref("");
 const editing = ref(false);
 
@@ -284,6 +301,8 @@ const editing = ref(false);
 const busy = ref(false);
 /** 生命周期操作失败的用户可读文案（成功路径不产生文案，直接重载视图） */
 const serverError = ref("");
+/** 自动暂停反馈（AutoPauseFeedback 第二层）：本次操作波及的"已被自动暂停"文案行 */
+const preemptNotice = ref<string[]>([]);
 /** 完成计划确认弹窗；放弃两步弹窗当前所在阶段（null = 关闭） */
 const pendingComplete = ref(false);
 const abortStage = ref<"info" | "type" | null>(null);
@@ -295,6 +314,25 @@ const correctError = ref("");
 /** 所有任务已完成（≥1 个任务）——「完成计划」亮起条件（PlanCompletionConfirm） */
 const allTasksDone = computed(
   () => plan.value != null && plan.value.tasks.length > 0 && plan.value.tasks.every((t) => t.status === "Completed"),
+);
+
+/** 抢占不变式（ADR-0006）的 UI 面：存在进行中的更高优先级计划时，开始/继续/复制
+ *  （复制即开始）禁用——服务层同规则兜底拒绝 */
+const higherActive = computed<PlanView | null>(() => {
+  const rank: Record<Priority, number> = { Low: 0, Medium: 1, High: 2 };
+  const self = plan.value;
+  if (!self) return null;
+  return (
+    allPlans.value.find((p) => p.status === "Active" && rank[p.priority] > rank[self.priority]) ??
+    null
+  );
+});
+
+/** 禁用 tooltip 的原因说明（span 承载——disabled 按钮不冒泡 hover） */
+const lifecycleBlockedTitle = computed(() =>
+  higherActive.value
+    ? `存在进行中的更高优先级计划「${higherActive.value.name}」，请先完成或暂停它`
+    : undefined,
 );
 
 /** 已推进的小时数（子目标任务按已完成子目标耗时；无子目标任务的汇报 07 接线后计入） */
@@ -338,7 +376,10 @@ async function load() {
   loadError.value = "";
   plan.value = null;
   try {
-    plan.value = await getPlan(Number(route.params.id));
+    // 详情与全量列表并行取：后者是"存在进行中的更高优先级"判定的数据源
+    const [detail, all] = await Promise.all([getPlan(Number(route.params.id)), listPlans()]);
+    plan.value = detail;
+    allPlans.value = all;
   } catch (err) {
     loadError.value = planErrorMessage(err as { kind?: string });
   }
@@ -356,18 +397,32 @@ function onCancel() {
   load();
 }
 
-/** 生命周期操作统一通道：busy 互斥、错误转文案、成功后重载（close* 收掉对应弹窗） */
+/** 生命周期操作统一通道：busy 互斥、错误转文案、成功后重载（close* 收掉对应弹窗）。
+ *  verb = 反馈文案的动作词（开始/继续/复制新建）。成功后跨窗口广播三个重取事件：
+ *  大面板（候选/暂停分组刷新）、小看板（当前任务失效回空态）、今日总结（抢占标注实时重算）。
+ *  actor 在 action 前捕获——复制并新建会跳转路由，不能用重载后的 plan 名。 */
 async function runLifecycle(
   action: () => Promise<unknown>,
   close: { closeComplete?: boolean; closeAbort?: boolean } = {},
+  verb = "开始",
 ) {
   busy.value = true;
   serverError.value = "";
+  preemptNotice.value = [];
+  const actor = plan.value?.name ?? "";
   try {
-    await action();
+    const outcome = (await action()) as Partial<LifecycleOutcome> | undefined;
+    if (outcome?.paused?.length) {
+      preemptNotice.value = outcome.paused.map(
+        (p) => `「${p.name}」已被自动暂停（高优先级「${actor}」${verb}）`,
+      );
+    }
     if (close.closeComplete) pendingComplete.value = false;
     if (close.closeAbort) abortStage.value = null;
     await load();
+    void emitTo("main-board", MAIN_BOARD_REFRESH_EVENT);
+    void emitTo("mini-board", MINI_BOARD_REFRESH_EVENT);
+    void emitTo("daily-summary", SUMMARY_REFRESH_EVENT);
   } catch (err) {
     serverError.value = planErrorMessage(err as { kind?: string });
   } finally {
@@ -375,10 +430,12 @@ async function runLifecycle(
   }
 }
 
-/** 复制并新建（终态唯一重启路径）：成功后跳到新计划详情 */
-async function copyAsNew() {
-  const newId = await copyPlanAsNew(plan.value!.id);
-  await router.push(`/control-panel/plans/${newId}`);
+/** 复制并新建（终态唯一重启路径）：成功后跳到新计划详情；
+ *  抢占清单回传给 runLifecycle 出反馈行 */
+async function copyAsNew(): Promise<LifecycleOutcome> {
+  const out = await copyPlanAsNew(plan.value!.id);
+  await router.push(`/control-panel/plans/${out.new_plan_id}`);
+  return { paused: out.paused };
 }
 
 /** 打开修正总进度弹窗：输入初值 = 当前进度（就近取一位小数） */
@@ -389,7 +446,7 @@ function openCorrection(t: TaskView) {
 }
 
 /** 修正总进度：本地校验 0–100 任意正数（最多一位小数，2026-08-24 修订），
- *  服务层权威落账（差额以事件记账）；落账后唤醒今日总结（内容实时重算，工单 11） */
+ *  服务层权威落账（差额以事件记账）；跨窗口重取由 runLifecycle 统一广播 */
 async function applyCorrection() {
   const v = Number(correctValue.value);
   if (!isValidPercentValue(v, 0)) {
@@ -400,7 +457,6 @@ async function applyCorrection() {
   await runLifecycle(() => correctTotalProgress(correcting.value!.id, v));
   if (!serverError.value) {
     correcting.value = null; // 失败保留弹窗，错误文案透出
-    void emitTo("daily-summary", SUMMARY_REFRESH_EVENT);
   }
 }
 
@@ -485,6 +541,19 @@ watch(() => route.params.id, load);
   border: 1px solid var(--color-danger);
   border-radius: var(--radius-sm);
   padding: 8px 12px;
+}
+
+/* 自动暂停反馈（AutoPauseFeedback 第二层）：琥珀提示行，语气同总结的高优先级提示 */
+.preempt-notice {
+  border: 1px solid var(--color-progress);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--color-progress);
+}
+
+.preempt-notice p {
+  margin: 0;
+  font-size: 13px;
 }
 
 .detail-body {

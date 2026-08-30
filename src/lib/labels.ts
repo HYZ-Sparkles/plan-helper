@@ -34,6 +34,7 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
     index?: number;
     task_index?: number | null;
     subgoal_index?: number;
+    plan_name?: string;
   };
   const taskNo = (i: number) => `第 ${i + 1} 个任务`;
   switch (err.kind) {
@@ -61,6 +62,8 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
       return "计划开始后优先级不可调整";
     case "PlanStatusInvalid":
       return "当前计划状态不允许此操作";
+    case "PreemptedByHigher":
+      return `存在进行中的更高优先级计划「${payload.plan_name ?? ""}」，请先完成或手动暂停它`;
     case "PlanNotTerminal":
       return "只有已完成或已放弃的计划可以复制并新建";
     case "TasksNotCompleted":

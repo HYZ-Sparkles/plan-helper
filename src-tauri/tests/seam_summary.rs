@@ -159,20 +159,25 @@ fn next_fire_uses_latest_window_and_cross_midnight_lands_next_day() {
 
 #[test]
 fn summary_assembles_three_layers_in_priority_order() {
-    // 测试情况：高优先级计划勾 2/3 个子目标（60 分）、中优先级无子目标报 25%（30 分）、
-    //           低优先级计划零推进。装配周一的总结（时钟周一，默认窗口）。
+    // 测试情况：三个计划同库，按抢占不变式（工单 12）的真实时间线推进——Low 开始 →
+    //           Medium 开始（抢停 Low，零推进）→ Medium 报 25%（30 分）→ High 开始
+    //           （抢停 Medium）→ High 勾 2/3 个子目标（60 分）。装配周一的总结。
     // 正确结果：只展示当日有推进的计划且优先级降序（Low 缺席）；计划 section 带优先级
     //           与当日总耗时；任务行带派生总进度（一位小数）与当日耗时；有子目标显示
     //           快照（前两个已完成、第三个待完成）；无子目标走百分比；总览 = 90/300、
     //           无结转、无提示、is_today。
     let conn = db::open_in_memory().unwrap();
-    let (hp, _) = active_plan(&conn, "高", Priority::High, subgoal_task("勾选活"));
+    let p_low = PlanService::create(&conn, &at(2026, 8, 21, 9, 0), &draft("低", Priority::Low, vec![plain_task("不干", 60)])).unwrap();
+    let p_mid = PlanService::create(&conn, &at(2026, 8, 21, 9, 0), &draft("中", Priority::Medium, vec![plain_task("百分活", 120)])).unwrap();
+    let hp = PlanService::create(&conn, &at(2026, 8, 21, 9, 0), &draft("高", Priority::High, vec![subgoal_task("勾选活")])).unwrap();
+    LifecycleService::start(&conn, p_low).unwrap();
+    LifecycleService::start(&conn, p_mid).unwrap(); // 抢停低（零推进 → 不展示）
+    let mt = PlanService::get(&conn, p_mid).unwrap().tasks[0].id;
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 9, 30), mt, 25.0).unwrap();
+    LifecycleService::start(&conn, hp).unwrap(); // 抢停中
     let sg = PlanService::get(&conn, hp).unwrap().tasks[0].subgoals.clone();
     ProgressService::complete_subgoal(&conn, &at(2026, 8, 24, 10, 0), sg[0].id).unwrap();
     ProgressService::complete_subgoal(&conn, &at(2026, 8, 24, 10, 30), sg[1].id).unwrap();
-    let (_, mt) = active_plan(&conn, "中", Priority::Medium, plain_task("百分活", 120));
-    ProgressService::report_percent(&conn, &at(2026, 8, 24, 11, 0), mt, 25.0).unwrap();
-    active_plan(&conn, "低", Priority::Low, plain_task("不干", 60)); // 零推进，不展示
 
     let v = SummaryService::summary(&conn, &at(2026, 8, 24, 12, 0), parse_date(MON).unwrap()).unwrap();
     assert!(v.is_today && !v.is_yesterday);
@@ -237,7 +242,7 @@ fn higher_priority_not_started_hint() {
     let conn = db::open_in_memory().unwrap();
     let (_, th) = active_plan(&conn, "高", Priority::High, plain_task("h", 100));
     ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), th, 10.0).unwrap();
-    let _ = active_plan(&conn, "未开始中", Priority::Medium, plain_task("m", 100));
+    let _ = active_plan_ready_but_never_started(&conn, Priority::Medium); // 工单 12：High 进行中时 Medium 本就不能开始，hint 场景用未开始种子
     assert!(!SummaryService::summary(&conn, &at(2026, 8, 24, 19, 0), parse_date(MON).unwrap()).unwrap().higher_priority_hint);
 
     let conn = db::open_in_memory().unwrap();
@@ -249,7 +254,7 @@ fn higher_priority_not_started_hint() {
     let conn = db::open_in_memory().unwrap();
     let (_, th) = active_plan(&conn, "高", Priority::High, plain_task("h", 100));
     ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), th, 10.0).unwrap();
-    let _ = active_plan(&conn, "未开始高", Priority::High, plain_task("h2", 100));
+    let _ = active_plan_ready_but_never_started(&conn, Priority::High);
     assert!(!SummaryService::summary(&conn, &at(2026, 8, 24, 19, 0), parse_date(MON).unwrap()).unwrap().higher_priority_hint);
 }
 

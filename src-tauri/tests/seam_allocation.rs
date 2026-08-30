@@ -42,19 +42,19 @@ fn sample(name: &str) -> PlanDraft {
 
 #[test]
 fn board_groups_active_plans_selectable_only() {
-    // 测试情况：高、中两个进行中计划 + 一个未开始的同内容计划；进行中计划内含
+    // 测试情况：两个进行中计划 + 一个未开始的同内容计划；进行中计划内含
     //           依赖边 B→A（A 未完成）、一个已完成任务（force 状态）。
-    // 正确结果：分组只含进行中计划且高优先级在前（PlanOrdering）；未开始计划不出现；
-    //           被阻塞的 B 不进候选（只展示可选任务），A 完成后 B 实时回到列表；
-    //           已完成任务不进候选；有子目标任务预计耗时 = 子目标求和（90）。
+    // 正确结果：分组只含进行中计划且创建倒序（PlanOrdering；工单 12 起抢占不变式
+    //           保证进行中必然同等级，组间不会再出现跨优先级——抢占场景见
+    //           seam_preemption）；未开始计划不出现；被阻塞的 B 不进候选
+    //           （只展示可选任务），A 完成后 B 实时回到列表；已完成任务不进候选；
+    //           有子目标任务预计耗时 = 子目标求和（90）。
     let conn = db::open_in_memory().unwrap();
-    let mut high = sample("高优先计划");
-    high.priority = Priority::High;
-    let p_high = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &high).unwrap();
-    let p_mid = PlanService::create(&conn, &at(2026, 8, 22, 9, 0), &sample("中优先计划")).unwrap();
+    let p_new = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &sample("新计划")).unwrap();
+    let p_old = PlanService::create(&conn, &at(2026, 8, 22, 9, 0), &sample("旧计划")).unwrap();
     PlanService::create(&conn, &at(2026, 8, 21, 9, 0), &sample("未开始计划")).unwrap();
-    LifecycleService::start(&conn, p_high).unwrap();
-    LifecycleService::start(&conn, p_mid).unwrap();
+    LifecycleService::start(&conn, p_new).unwrap();
+    LifecycleService::start(&conn, p_old).unwrap();
 
     let v = AllocationService::board(&conn, &at(2026, 8, 24, 9, 0)).unwrap();
     assert_eq!(v.date, "2026-08-24");
@@ -62,8 +62,8 @@ fn board_groups_active_plans_selectable_only() {
     assert_eq!(v.base_minutes, 300);
     assert_eq!(v.selected_task_ids, Vec::<i64>::new(), "尚未分配");
     assert_eq!(v.groups.len(), 2, "未开始计划不进候选");
-    assert_eq!(v.groups[0].plan_name, "高优先计划", "Priority 降序");
-    assert_eq!(v.groups[0].priority, Priority::High);
+    assert_eq!(v.groups[0].plan_name, "新计划", "CreatedAt 倒序");
+    assert_eq!(v.groups[0].priority, Priority::Medium);
 
     let names = |g: usize| {
         v.groups[g]

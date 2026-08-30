@@ -311,18 +311,17 @@ fn correction_sets_absolute_value_and_logs_delta() {
 
 #[test]
 fn current_task_requires_today_list_and_follows_validity() {
-    // 测试情况：高/中两个进行中计划各一个任务，全部选入今日；
-    //           指定未分配任务为当前任务、指定当前任务（中优先计划）、暂停其计划、
+    // 测试情况：两个进行中计划（抢占不变式保证同等级，工单 12）各一个任务，全部选入今日；
+    //           指定未分配任务为当前任务、指定当前任务（创建较早的计划）、暂停其计划、
     //           恢复、重交分配剔除该任务、隔日再读。
     // 正确结果：不在今日列表 TaskNotInToday；指定成功后视图展示；
     //           计划暂停 → 小看板回空态，恢复 → 回到当前任务；
     //           被移出今日列表 → 回空态；隔日分配失效 → 回空态、指定也被拒；
-    //           「更换任务」候选当前任务同计划分组排最前。
+    //           「更换任务」候选当前任务同计划分组排最前（默认序创建倒序为
+    //           [高计划, 中计划]，当前任务的中计划被提到最前才算通过）。
     let conn = db::open_in_memory().unwrap();
-    let mut high = draft_of_tasks("高计划", vec![plain_task("高任务", 60)]);
-    high.priority = Priority::High;
-    let p_high = PlanService::create(&conn, &at(2026, 8, 22, 9, 0), &high).unwrap();
-    let p_mid = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &draft_of_tasks("中计划", vec![plain_task("中任务", 90)])).unwrap();
+    let p_high = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &draft_of_tasks("高计划", vec![plain_task("高任务", 60)])).unwrap();
+    let p_mid = PlanService::create(&conn, &at(2026, 8, 22, 9, 0), &draft_of_tasks("中计划", vec![plain_task("中任务", 90)])).unwrap();
     LifecycleService::start(&conn, p_high).unwrap();
     LifecycleService::start(&conn, p_mid).unwrap();
     let t_high = PlanService::get(&conn, p_high).unwrap().tasks[0].id;

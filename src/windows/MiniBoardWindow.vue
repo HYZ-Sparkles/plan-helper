@@ -245,6 +245,7 @@ import {
 import { hoursFromMinutes, hoursLabel, carryLabel, planErrorMessage } from "../lib/labels";
 import { isValidPercentValue } from "../lib/validation";
 import { SUMMARY_REFRESH_EVENT } from "../lib/summary";
+import { MINI_BOARD_REFRESH_EVENT } from "../lib/events";
 
 const win = getCurrentWebviewWindow();
 const view = ref<MiniBoardView | null>(null);
@@ -375,7 +376,7 @@ function commitStep() {
 onMounted(async () => {
   await load();
   // 大面板确认分配后刷新（MainBoard 确认时先发事件再 show 本窗口）
-  await listen("mini-board:refresh", load);
+  await listen(MINI_BOARD_REFRESH_EVENT, load);
   // 关闭 = 隐藏（CONTEXT 窗口关闭语义；完整语义归工单 14）
   await win.onCloseRequested(async (e) => {
     e.preventDefault();

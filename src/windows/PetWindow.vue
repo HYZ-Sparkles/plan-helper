@@ -35,6 +35,7 @@ import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dra
 import { afterDragSteps, pickRandomKind, RANDOM_INTERVAL_MS, randomSteps, type Pose } from "../lib/pet/actions";
 import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
+import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_REFRESH_EVENT } from "../lib/events";
 import { exitApp, getDailySummaryStatus, getMiniBoard, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
 /** 启动序列落地（7 Stand Idle 开始）后站立的展示节拍，再转入工作睡眠 */
@@ -105,7 +106,7 @@ onMounted(async () => {
   });
   // 大面板确认（06）会点亮小看板：工作模式按刚性组合就位，休息模式坚持隐藏（67 休息
   // 即不工作——显隐跟着模式走，2026-08-29 反馈）
-  await listen("mini-board:refresh", () => {
+  await listen(MINI_BOARD_REFRESH_EVENT, () => {
     if (mode.value === "rest") {
       boardAttached = false;
       void hideWindow("mini-board");
@@ -162,7 +163,7 @@ async function checkAutoOpen(manual: boolean) {
 
 async function openMainBoard() {
   // 重开必须带回最新数据（06 的重开语义），再复用通用的显示/聚焦
-  await emitTo("main-board", "main-board:reopen");
+  await emitTo("main-board", MAIN_BOARD_REOPEN_EVENT);
   await openWindow("main-board");
 }
 

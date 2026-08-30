@@ -83,6 +83,7 @@ import {
 import { hoursFromMinutes, statusLabel } from "../lib/labels";
 import { localToday } from "../lib/validation";
 import { openDailySummaryWindow } from "../lib/summary";
+import { MAIN_BOARD_REOPEN_EVENT } from "../lib/events";
 
 /** 筛选项：key + 文案 + 命中状态集（「全部」不过滤）；五个状态都是一等公民 */
 const filters: { key: string; label: string; statuses: PlanStatus[] | null }[] = [
@@ -128,7 +129,7 @@ function totalHours(p: PlanView) {
 async function openMainBoard() {
   const board = await WebviewWindow.getByLabel("main-board");
   if (!board) return; // 面板随应用启动创建（隐藏态），正常路径恒存在
-  await emitTo("main-board", "main-board:reopen");
+  await emitTo("main-board", MAIN_BOARD_REOPEN_EVENT);
   await board.show();
   await board.setFocus();
 }

@@ -6,7 +6,7 @@ use tauri::State;
 use crate::app_state::AppState;
 use crate::domain::allocation::{AllocationBoardView, AllocationService};
 use crate::domain::app_state::{app_state_view, AppStateView};
-use crate::domain::lifecycle::LifecycleService;
+use crate::domain::lifecycle::{CopyAsNewOutcome, LifecycleOutcome, LifecycleService};
 use crate::domain::plans::{db_err, PlanDraft, PlanError, PlanService, PlanView};
 use crate::domain::progress::{MiniBoardView, ProgressService};
 use crate::domain::settings::SettingsService;
@@ -66,25 +66,25 @@ pub fn delete_task(state: State<'_, AppState>, task_id: i64) -> Result<(), PlanE
     PlanService::delete_task(&conn, state.clock.as_ref(), task_id)
 }
 
-/* ---- 计划生命周期（工单 05）：薄代理，状态机在 domain::lifecycle ---- */
+/* ---- 计划生命周期（工单 05/12）：薄代理，状态机与抢占不变式在 domain::lifecycle ---- */
 
-/// 未开始 → 进行中。
+/// 未开始 → 进行中（抢占不变式：更高等级进行中时拒绝；返回被自动暂停的低等级计划）。
 #[tauri::command]
-pub fn start_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
+pub fn start_plan(state: State<'_, AppState>, plan_id: i64) -> Result<LifecycleOutcome, PlanError> {
     let conn = state.db.lock().unwrap();
     LifecycleService::start(&conn, plan_id)
 }
 
-/// 进行中 → 已暂停（手动，原因记"用户主动"）。
+/// 进行中 → 已暂停（手动，原因记"用户主动"）；高等级清空触发逐层恢复（服务层）。
 #[tauri::command]
 pub fn pause_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     LifecycleService::pause(&conn, plan_id)
 }
 
-/// 已暂停 → 进行中。
+/// 已暂停 → 进行中（抢占不变式同 start；返回被自动暂停的低等级计划）。
 #[tauri::command]
-pub fn resume_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
+pub fn resume_plan(state: State<'_, AppState>, plan_id: i64) -> Result<LifecycleOutcome, PlanError> {
     let conn = state.db.lock().unwrap();
     LifecycleService::resume(&conn, plan_id)
 }
@@ -96,16 +96,19 @@ pub fn complete_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), Pla
     LifecycleService::complete(&conn, plan_id)
 }
 
-/// 进行中/已暂停 → 已放弃（二级确认在 UI）。
+/// 进行中/已暂停 → 已放弃（二级确认在 UI）；清空进行中高等级触发逐层恢复（服务层）。
 #[tauri::command]
 pub fn abort_plan(state: State<'_, AppState>, plan_id: i64) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     LifecycleService::abort(&conn, plan_id)
 }
 
-/// 终态计划复制并新建（进度归零、名称加"- 副本"、直接进行中），返回新计划 id。
+/// 终态计划复制并新建（进度归零、名称加"- 副本"、直接进行中——抢占不变式同 start）。
 #[tauri::command]
-pub fn copy_plan_as_new(state: State<'_, AppState>, plan_id: i64) -> Result<i64, PlanError> {
+pub fn copy_plan_as_new(
+    state: State<'_, AppState>,
+    plan_id: i64,
+) -> Result<CopyAsNewOutcome, PlanError> {
     let conn = state.db.lock().unwrap();
     LifecycleService::copy_as_new(&conn, state.clock.as_ref(), plan_id)
 }

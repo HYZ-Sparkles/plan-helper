@@ -190,6 +190,9 @@ pub enum PlanError {
     PriorityLocked,
     /// 计划状态不允许该操作（ADR-0001 单向瀑布外的转换；from = 当前状态）
     PlanStatusInvalid { from: PlanStatus },
+    /// 抢占不变式（ADR-0006）：存在进行中的更高等级计划，开始/继续/复制被拒——
+    /// 想开低等级计划，先完成或手动暂停当前高等级（plan_name = 阻挡计划名，tooltip/文案用）
+    PreemptedByHigher { plan_name: String },
     /// "复制并新建"仅终态计划可用（from = 当前状态）
     PlanNotTerminal { from: PlanStatus },
     /// 完成计划要求所有任务已完成（PlanCompletionConfirm：任务自动、计划手动）

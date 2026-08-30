@@ -163,21 +163,40 @@ export function deleteTask(taskId: number): Promise<void> {
   return invoke<void>("delete_task", { taskId });
 }
 
-/* ---- 计划生命周期（工单 05）：状态机在服务层，UI 只按状态展示可得操作 ---- */
+/* ---- 计划生命周期（工单 05/12）：状态机与抢占不变式在服务层，UI 只按状态展示可得操作 ---- */
 
-/** 未开始 → 进行中 */
-export function startPlan(planId: number): Promise<void> {
-  return invoke<void>("start_plan", { planId });
+/** 被自动暂停的一张计划（AutoPauseFeedback 反馈文案的数据源） */
+export interface PreemptedPlan {
+  id: number;
+  name: string;
 }
 
-/** 进行中 → 已暂停（手动，原因记"用户主动"） */
+/** start/resume 的副作用视图（对应 domain::lifecycle::LifecycleOutcome）：
+ *  paused = 本次操作把哪些进行中的低等级计划挤下了暂停席 */
+export interface LifecycleOutcome {
+  paused: PreemptedPlan[];
+}
+
+/** 复制并新建结果（对应 domain::lifecycle::CopyAsNewOutcome）：复制即进行中，
+ *  抢占语义同 start */
+export interface CopyAsNewOutcome {
+  new_plan_id: number;
+  paused: PreemptedPlan[];
+}
+
+/** 未开始 → 进行中（存在进行中的更高优先级计划时被服务层拒绝） */
+export function startPlan(planId: number): Promise<LifecycleOutcome> {
+  return invoke<LifecycleOutcome>("start_plan", { planId });
+}
+
+/** 进行中 → 已暂停（手动，原因记"用户主动"）；高等级清空触发服务层逐层恢复 */
 export function pausePlan(planId: number): Promise<void> {
   return invoke<void>("pause_plan", { planId });
 }
 
-/** 已暂停 → 进行中 */
-export function resumePlan(planId: number): Promise<void> {
-  return invoke<void>("resume_plan", { planId });
+/** 已暂停 → 进行中（抢占约束同 start） */
+export function resumePlan(planId: number): Promise<LifecycleOutcome> {
+  return invoke<LifecycleOutcome>("resume_plan", { planId });
 }
 
 /** 进行中 → 已完成（手动确认；服务层校验全部任务已完成） */
@@ -190,9 +209,9 @@ export function abortPlan(planId: number): Promise<void> {
   return invoke<void>("abort_plan", { planId });
 }
 
-/** 终态计划复制并新建（进度归零、"- 副本"、直接进行中），返回新计划 id */
-export function copyPlanAsNew(planId: number): Promise<number> {
-  return invoke<number>("copy_plan_as_new", { planId });
+/** 终态计划复制并新建（进度归零、"- 副本"、直接进行中），返回新计划 id 与抢占清单 */
+export function copyPlanAsNew(planId: number): Promise<CopyAsNewOutcome> {
+  return invoke<CopyAsNewOutcome>("copy_plan_as_new", { planId });
 }
 
 /* ---- 今日分配（工单 06）：装配与校验在 domain::allocation ---- */
@@ -228,6 +247,8 @@ export interface AllocationBoardView {
   selected_task_ids: number[];
   /** 候选分组：所有进行中计划（PlanOrdering 排序） */
   groups: AllocationGroup[];
+  /** 被抢占暂停的计划分组（灰显不可选，AutoPauseFeedback 第一层；只含自动抢占） */
+  paused_groups: AllocationGroup[];
 }
 
 /** 大面板视图：候选分组（依赖过滤）+ 今日回显 + 当日目标 */

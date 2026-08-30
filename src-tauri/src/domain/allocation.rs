@@ -12,7 +12,9 @@ use serde::Serialize;
 use crate::clock::Clock;
 use crate::domain::deps::DependencyService;
 use crate::domain::ledger::LedgerService;
-use crate::domain::plans::{db_err, PlanError, PlanService, PlanStatus, Priority, TaskStatus};
+use crate::domain::plans::{
+    db_err, PauseReason, PlanError, PlanService, PlanStatus, Priority, TaskStatus,
+};
 use crate::domain::settings::SettingsService;
 
 /// 大面板一次装配的完整视图（工单 06）。
@@ -30,6 +32,9 @@ pub struct AllocationBoardView {
     pub selected_task_ids: Vec<i64>,
     /// 候选分组：所有进行中计划，PlanOrdering 默认排序（Priority 降序 + 创建倒序）
     pub groups: Vec<AllocationGroup>,
+    /// 被抢占暂停的计划分组（灰显不可选，AutoPauseFeedback 第一层）：
+    /// 只列自动抢占的——用户主动暂停是自己按的，看板不重复提醒
+    pub paused_groups: Vec<AllocationGroup>,
 }
 
 /// 一个进行中计划的分组（section header = 计划名 + 优先级）。
@@ -55,9 +60,11 @@ pub struct AllocationTask {
 pub struct AllocationService;
 
 impl AllocationService {
-    /// 装配大面板视图：候选分组（依赖过滤）+ 今日回显 + 调整后目标（工单 10 含结转）。
+    /// 装配大面板视图：候选分组（依赖过滤）+ 被抢占暂停分组（工单 12）+ 今日回显
+    /// + 调整后目标（工单 10 含结转）。
     pub fn board(conn: &Connection, clock: &dyn Clock) -> Result<AllocationBoardView, PlanError> {
         let groups = Self::candidates(conn)?;
+        let paused_groups = Self::preempted_groups(conn)?;
         let selectable = selectable_of(&groups);
         let target = LedgerService::day_target(conn, clock)?;
         Ok(AllocationBoardView {
@@ -70,6 +77,7 @@ impl AllocationService {
                 .filter(|id| selectable.contains(id))
                 .collect(),
             groups,
+            paused_groups,
         })
     }
 
@@ -140,9 +148,9 @@ impl AllocationService {
             .unwrap_or_default())
     }
 
-    /// 候选分组：进行中计划（抢占未实现，天然同等级）→ 未完成任务 → 依赖就绪过滤
-    /// （被阻塞的不展示）。排序直接复用 PlanService::list 的 PlanOrdering；
-    /// 就绪判定复用 DependencyService（waiting_on 派生）。
+    /// 候选分组：进行中计划（抢占不变式保证必然同等级，无需"只显示最高等级"特判——
+    /// ADR-0006）→ 未完成任务 → 依赖就绪过滤（被阻塞的不展示）。
+    /// 排序直接复用 PlanService::list 的 PlanOrdering；就绪判定复用 DependencyService。
     fn candidates(conn: &Connection) -> Result<Vec<AllocationGroup>, PlanError> {
         let mut groups = Vec::new();
         for plan in PlanService::list(conn)?
@@ -164,6 +172,40 @@ impl AllocationService {
                     estimated_minutes: t.estimated_minutes.unwrap_or(0),
                 });
             }
+            if !tasks.is_empty() {
+                groups.push(AllocationGroup {
+                    plan_id: plan.id,
+                    plan_name: plan.name,
+                    priority: plan.priority,
+                    tasks,
+                });
+            }
+        }
+        Ok(groups)
+    }
+
+    /// 暂停分组（AutoPauseFeedback 第一层，工单 12）：被自动抢占暂停的计划灰显展示
+    /// 其未完成任务，不可勾选（候选求交不含它们，勾选状态天然为空）。
+    /// 高等级清空后自动恢复，届时该组随重取回到候选列表。
+    fn preempted_groups(conn: &Connection) -> Result<Vec<AllocationGroup>, PlanError> {
+        let mut groups = Vec::new();
+        for plan in PlanService::list(conn)?
+            .into_iter()
+            .filter(|p| {
+                p.status == PlanStatus::Paused
+                    && p.pause_reason == Some(PauseReason::AutoPreempted)
+            })
+        {
+            let tasks: Vec<AllocationTask> = plan
+                .tasks
+                .iter()
+                .filter(|t| t.status != TaskStatus::Completed)
+                .map(|t| AllocationTask {
+                    id: t.id,
+                    name: t.name.clone(),
+                    estimated_minutes: t.estimated_minutes.unwrap_or(0),
+                })
+                .collect();
             if !tasks.is_empty() {
                 groups.push(AllocationGroup {
                     plan_id: plan.id,

@@ -74,9 +74,10 @@ fn state_machine_allows_only_waterfall_transitions() {
             let id = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &sample("矩阵")).unwrap();
             force_plan_status(&conn, id, from);
             let result = match op {
-                "start" => LifecycleService::start(&conn, id),
+                // start/resume 返回 LifecycleOutcome（工单 12），抹平成 () 便于统一断言
+                "start" => LifecycleService::start(&conn, id).map(|_| ()),
                 "pause" => LifecycleService::pause(&conn, id),
-                "resume" => LifecycleService::resume(&conn, id),
+                "resume" => LifecycleService::resume(&conn, id).map(|_| ()),
                 _ => LifecycleService::abort(&conn, id),
             };
             if legal(op, from) {
@@ -142,9 +143,10 @@ fn complete_requires_all_tasks_completed_then_is_terminal() {
     assert_eq!(status_of(&conn, id), PlanStatus::Completed);
 
     for result in [
-        LifecycleService::start(&conn, id),
+        // start/resume 现在返回 LifecycleOutcome（工单 12 的自动暂停清单），统一抹平成 () 便于合表断言
+        LifecycleService::start(&conn, id).map(|_| ()),
         LifecycleService::pause(&conn, id),
-        LifecycleService::resume(&conn, id),
+        LifecycleService::resume(&conn, id).map(|_| ()),
         LifecycleService::complete(&conn, id),
         LifecycleService::abort(&conn, id),
     ] {
@@ -259,7 +261,7 @@ fn copy_as_new_resets_progress_and_starts_active() {
     }
     LifecycleService::complete(&conn, id).unwrap();
 
-    let new_id = LifecycleService::copy_as_new(&conn, &at(2026, 8, 25, 9, 0), id).unwrap();
+    let new_id = LifecycleService::copy_as_new(&conn, &at(2026, 8, 25, 9, 0), id).unwrap().new_plan_id;
     let new_plan = PlanService::get(&conn, new_id).unwrap();
     assert_eq!(new_plan.name, "备考英语 6 级 - 副本");
     assert_eq!(new_plan.summary, "词汇书两轮");

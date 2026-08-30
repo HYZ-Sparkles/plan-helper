@@ -4,6 +4,8 @@
     按计划分组展示所有进行中计划的可选任务；勾选实时累计对照当日目标（柔性边界，
     不阻止提交）。被依赖阻塞的任务不展示——只展示可选任务（2026-08-24 用户决策，
     原"置灰展示等待项"砍掉，解锁当日自然回到列表）。
+    被抢占暂停的计划（工单 12）灰显移入"暂停"分组、不可勾选（AutoPauseFeedback
+    第一层）；生命周期变化经 main-board:refresh 静默重取，立刻可见。
     确认 = 持久化当日分配并隐藏窗口；重开（控制面板入口）回显旧选择可覆盖重选。
     休息日打开 = 加班态（2026-08-29 用户决策，取代原"分配不加载"休息日空态）：
     手动切入工作模式即可选任务提交；自动触发仍限工作日（不打扰）。
@@ -28,8 +30,8 @@
       <p v-if="loadError" class="error">{{ loadError }}</p>
       <p v-else-if="!board" class="hint loading">加载中…</p>
 
-      <!-- 空态：没有进行中的计划（或全部完成等待确认） -->
-      <div v-else-if="board.groups.length === 0" class="empty">
+      <!-- 空态：没有进行中的计划（或全部完成等待确认），也没有被抢占暂停的计划 -->
+      <div v-else-if="board.groups.length === 0 && board.paused_groups.length === 0" class="empty">
         <PhCoffee :size="28" />
         <p class="empty-title">今天没有可推进的任务</p>
         <p class="hint">在控制面板开始一个计划后，回到这里分配今日任务</p>
@@ -49,6 +51,25 @@
                 <span class="task-name">{{ t.name }}</span>
                 <span class="task-time">{{ hoursFromMinutes(t.estimated_minutes) }} 小时</span>
               </label>
+            </li>
+          </ul>
+        </section>
+
+        <!-- 被抢占暂停的计划（AutoPauseFeedback 第一层，工单 12）：灰显移入"暂停"分组，
+             无勾选框不可选；高优先级清空自动恢复后随刷新回到上方候选 -->
+        <section v-for="g in board.paused_groups" :key="`paused-${g.plan_id}`" class="group paused">
+          <header class="group-head">
+            <PhFlag :size="15" class="group-flag" />
+            <span class="group-name">{{ g.plan_name }}</span>
+            <PriorityLabel :priority="g.priority" />
+            <StatusBadge status="Paused" />
+          </header>
+          <ul class="task-card">
+            <li v-for="t in g.tasks" :key="t.id">
+              <div class="task-row paused-row">
+                <span class="task-name">{{ t.name }}</span>
+                <span class="task-time">{{ hoursFromMinutes(t.estimated_minutes) }} 小时</span>
+              </div>
             </li>
           </ul>
         </section>
@@ -101,6 +122,12 @@ import {
 } from "@phosphor-icons/vue";
 import MicroBar from "../components/MicroBar.vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
+import StatusBadge from "../components/StatusBadge.vue";
+import {
+  MAIN_BOARD_REOPEN_EVENT,
+  MAIN_BOARD_REFRESH_EVENT,
+  MINI_BOARD_REFRESH_EVENT,
+} from "../lib/events";
 import {
   commitTodayAllocation,
   getAllocationBoard,
@@ -168,7 +195,7 @@ async function confirm() {
     await commitTodayAllocation(selected.value);
     commitError.value = "";
     // 分配落定 → 唤醒小看板（先发刷新事件再显示，窗口读到的是最新视图）
-    await emitTo("mini-board", "mini-board:refresh");
+    await emitTo("mini-board", MINI_BOARD_REFRESH_EVENT);
     (await WebviewWindow.getByLabel("mini-board"))?.show();
     await win.hide(); // 关闭 = 隐藏（CONTEXT 窗口关闭语义），重开入口在控制面板
   } catch (err) {
@@ -181,7 +208,10 @@ async function confirm() {
 onMounted(async () => {
   await load();
   // 重开刷新：控制面板「打开大面板」先发事件再 show，这里回到最新数据（依赖/状态可能已变）
-  await listen("main-board:reopen", load);
+  await listen(MAIN_BOARD_REOPEN_EVENT, load);
+  // 生命周期变化（工单 12）：开始/暂停/恢复/完成/放弃/复制落库后静默重取——
+  // 被抢占的计划立刻灰显进入"暂停"分组，自动恢复的计划回到候选（显隐不变）
+  await listen(MAIN_BOARD_REFRESH_EVENT, load);
   // 系统关闭请求拦截为隐藏（与「确认」同一语义；正式的关闭语义归工单 14 统一）
   await win.onCloseRequested(async (e) => {
     e.preventDefault();
@@ -328,6 +358,21 @@ onMounted(async () => {
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
   font-size: 13px;
+}
+
+/* 被抢占暂停的分组（AutoPauseFeedback 第一层）：整体灰显、不可交互 */
+.group.paused .group-name,
+.paused-row .task-name,
+.paused-row .task-time {
+  color: var(--text-muted);
+}
+
+.paused-row {
+  cursor: default;
+}
+
+.paused-row:hover {
+  background: transparent;
 }
 
 /* ---- 底部状态条：累计/目标 + 进度条；确认居中；差额软提示居右 ---- */
