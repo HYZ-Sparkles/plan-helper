@@ -14,13 +14,17 @@
  *   播放中硬切由引擎 flick 计数驱动 PetSprite 快速淡出淡入
  * - 再见（菜单「再见」/ 托盘「退出」共用通道，工单 14）：17 Jump in to the Box 播完 →
  *   exitApp()（关闭全部窗口）；动画占用时等播完再接（重试），保证常驻托盘入口永远有效
- * - 拖拽（09，PetDragBounds）：moveTo 每帧经 dragBounds 钳制（任务栏禁入/全可见/跨屏
+ * - 小看板按需显隐（2026-08-30 反馈，MiniBoardVisibility）：不再常驻——平时隐藏，
+ *   左键点击桌宠唤起/收起（休息模式不响应，67），事件亮相（分配确认/切回工作/启动续接）
+ *   自动亮出；每次亮出发 mini-board:show 让看板重置视图并启动 10s 自动隐藏计时（悬停
+ *   暂停，✕/到点看板发 dismiss 请求回来由本窗口统一隐藏并解除挂靠）。显隐唯一持有者
+ *   是本窗口（拖拽耦合状态 boardAttached 与显隐同源）
+ * - 右键拖拽（09，PetDragBounds）：moveTo 每帧经 dragBounds 钳制（任务栏禁入/全可见/跨屏
  *   重叠面积选屏），松手 <20px 吸附最近工作区边缘；拖动期间 freeze 保持当前帧不动、
  *   松手 unfreeze 继续（不打断播放状态）；小看板可见时与桌宠成**刚性组合体**按整体
  *   矩形钳制（一个被边界挡住另一个也一起停，相对位置固定；PetBoardCoupling 位置联动、
- *   动作独立）；休息模式拖后非站立先 3 Sit to Stand 再 15 Attack（用户动作占锁）
- * - 小看板显隐跟着模式走：休息模式隐藏（含大面板确认后也不亮，67 休息即不工作），
- *   工作模式有当前任务才恢复（恢复时以桌宠为锚刚性就位，不重叠）
+ *   动作独立）；休息模式拖后非站立先 3 Sit to Stand 再 15 Attack（用户动作占锁）。
+ *   左键拖动不移动桌宠（2026-08-30 反馈：移动归右键，左键留给唤看板）
  * - 今日总结触发（11，DailySummaryTrigger）：常驻心跳负责定时——启动查补登（当天没开
  *   应用 → 次日首开弹"昨日总结"）、定时到最晚工作窗口结束自动弹（只弹一次，服务端登记）
  * - 工作窗口开始触发（13，AutoOpenMainBoard）：心跳定时到下一个工作窗口开始，届时
@@ -40,7 +44,7 @@ import { afterDragSteps, pickRandomKind, RANDOM_INTERVAL_MS, randomSteps, type P
 import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
-import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_REFRESH_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
+import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
 import { exitApp, getDailySummaryStatus, getMiniBoard, getNextWindowStart, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
 /** 启动序列落地（7 Stand Idle 开始）后站立的展示节拍，再转入工作睡眠 */
@@ -114,8 +118,8 @@ onMounted(async () => {
     menuOpen.value = false;
     menuClosedAt = performance.now();
   });
-  // 大面板确认（06）会点亮小看板：工作模式按刚性组合就位，休息模式坚持隐藏（67 休息
-  // 即不工作——显隐跟着模式走，2026-08-29 反馈）
+  // 大面板确认（06）会点亮小看板：工作模式按刚性组合就位（亮出即启动自动隐藏计时），
+  // 休息模式坚持隐藏（67 休息即不工作——显隐跟着模式走，2026-08-29 反馈）
   await listen(MINI_BOARD_REFRESH_EVENT, () => {
     if (mode.value === "rest") {
       boardAttached = false;
@@ -123,6 +127,11 @@ onMounted(async () => {
     } else {
       void attachBoardRigidly();
     }
+  });
+  // 小看板请求收起（✕ / 自动隐藏到点，2026-08-30 反馈）：显隐唯一持有者执行隐藏并解除挂靠
+  await listen(MINI_BOARD_DISMISS_EVENT, async () => {
+    boardAttached = false;
+    await hideWindow("mini-board");
   });
   // 设置保存（13）：生效时刻由服务端按版本历史裁决，两个定时触发都重查重排
   await listen(SETTINGS_CHANGED_EVENT, () => {
@@ -143,6 +152,8 @@ async function syncBoardAtStartup() {
     await mini.hide();
   } else {
     boardAttached = await mini.isVisible();
+    // 启动亮板（Rust 侧按"工作时间 + 有当前任务"显示）也是亮相：同样走自动隐藏计时
+    if (boardAttached) await emitTo("mini-board", MINI_BOARD_SHOW_EVENT);
   }
 }
 
@@ -224,6 +235,21 @@ function switchMode() {
   }
 }
 
+/** 左键单击桌宠：工作模式唤起/收起小看板（休息即不工作，休息模式不响应）。小看板
+ *  显隐的唯一持有者（2026-08-30 反馈：常驻改按需——平时隐藏、点击唤起、自动隐藏） */
+async function toggleMiniBoard() {
+  if (mode.value !== "work") return;
+  if (boardAttached) {
+    boardAttached = false;
+    await hideWindow("mini-board");
+    return;
+  }
+  const mini = await WebviewWindow.getByLabel("mini-board");
+  if (!mini) return;
+  await emitTo("mini-board", MINI_BOARD_REFRESH_EVENT); // 唤起读最新（隔日/生命周期后可能已变）
+  await attachBoardRigidly(); // 刚性就位 + 亮出 + 启动自动隐藏计时
+}
+
 async function hideWindow(label: string) {
   const target = await WebviewWindow.getByLabel(label);
   await target?.hide();
@@ -270,6 +296,8 @@ async function attachBoardRigidly() {
   }
   await mini.show();
   boardAttached = true;
+  // 亮出即亮相：看板回任务视图干净状态并启动自动隐藏计时（悬停暂停，2026-08-30 反馈）
+  await emitTo("mini-board", MINI_BOARD_SHOW_EVENT);
 }
 
 /* ---- 随机动作调度（09，PetRandomAction）：距上一次动作结束 300s，吃:跳:闲坐 = 4:3:3 ---- */
@@ -397,6 +425,7 @@ let boardAttached = false;
 let drag: {
   px: number;
   py: number; // 指针起点（逻辑像素）
+  btn: number; // 按下键（0 左 / 2 右）：左键点击唤看板、右键点击菜单、右键拖动移动（2026-08-30 反馈）
   winX: number;
   winY: number; // 桌宠窗口起点（物理像素）
   boardX: number;
@@ -454,6 +483,7 @@ function onPointerDown(e: PointerEvent) {
   drag = {
     px: e.screenX,
     py: e.screenY,
+    btn: e.button,
     winX: p.x,
     winY: p.y,
     factor: mover.scaleFactor?.() ?? 1,
@@ -471,8 +501,9 @@ function onPointerMove(e: PointerEvent) {
   if (!d.moved) {
     if (Math.abs(dx) <= CLICK_SLOP_PX && Math.abs(dy) <= CLICK_SLOP_PX) return;
     d.moved = true;
-    engine.freeze(); // 拖动期间保持当前帧不动（README 原义），播放状态保留
+    if (d.btn === 2) engine.freeze(); // 右键拖动期间保持当前帧不动（README 原义），播放状态保留
   }
+  if (d.btn !== 2) return; // 左键拖动不移动桌宠（2026-08-30 反馈：移动归右键），位移只作点击判定
   // PetDragBounds 约束 1/2/3 按**组合体**（未挂靠 = 桌宠单体）矩形：跨屏重叠面积选屏 +
   // 钳进工作区。刚性：一个成员被边界挡住，全体一起停（相对位置固定，2026-08-29 反馈）
   const landing = clampDragPosition(d.unitX + dx, d.unitY + dy, d.unitW, d.unitH, monitorsSnapshot());
@@ -487,9 +518,12 @@ function onPointerUp() {
   drag = null;
   if (!d || !mover) return;
   if (!d.moved) {
-    void toggleMenu();
+    // 单击分流（2026-08-30 反馈）：左键唤/收小看板，右键菜单
+    if (d.btn === 0) void toggleMiniBoard();
+    if (d.btn === 2) void toggleMenu();
     return;
   }
+  if (d.btn !== 2) return; // 左键拖动：无动作（不吸附、不移动、无拖后动作）
   // PetDragBounds 约束 4：组合体贴近工作区边（<20px 逻辑）吸附最近边，增量同样刚性
   const appliedX = mover.position().x - d.winX;
   const appliedY = mover.position().y - d.winY;
@@ -560,7 +594,8 @@ async function positionMenu() {
 </script>
 
 <template>
-  <!-- 拖拽/点击区 = 窗口整面（桌宠本体即窗口）；startup/goodbye 期 pointer-events 关掉交互 -->
+  <!-- 拖拽/点击区 = 窗口整面（桌宠本体即窗口）；startup/goodbye 期 pointer-events 关掉交互。
+       左键点击唤/收小看板、右键点击菜单、右键拖动移动（2026-08-30 反馈）；拦截浏览器原生右键菜单 -->
   <div
     class="pet-shell"
     :class="{ frozen: interactionsOff() }"
@@ -568,6 +603,7 @@ async function positionMenu() {
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
     @pointercancel="onPointerUp"
+    @contextmenu.prevent
   >
     <PetSprite :anim="sprite.anim" :frame="sprite.frame" :flip="sprite.flip" :fade-signal="sprite.flick" />
   </div>

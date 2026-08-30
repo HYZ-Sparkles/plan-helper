@@ -1,25 +1,38 @@
 <template>
   <!--
     小看板（工单 07，术语 MiniBoard / CurrentTask / PercentAdjustControl / SubGoalUndo）。
-    常驻桌宠旁的置顶卡片：头部计划名 + 更换任务；主体按任务形态切换——
+    桌宠下方的按需伴侣件（2026-08-30 反馈，不再常驻）：被亮出后 10s 无交互自动收起
+    （悬停暂停计时）、✕ 随时收起；显隐由 PetWindow 统一持有（本窗口只发 dismiss 请求）。
+    头部计划名 + 更换任务 + 收起；主体按任务形态切换——
     有子目标 = 按序勾选（已完成行可点撤销）、无子目标 = 百分比增量控件（会话级不持久化）；
     当前任务完成后停留"任务完成"态等用户换下一个，不自动切换；
     底部常驻今日总量微型进度条（今日推进 X / 调整后目标 Y + 结转标注，工单 10；
     休息日加班态无目标义务，只看累计）。
     拖拽跟随归 09、休息模式显隐归 08；关闭请求拦截为隐藏（归 14）。
   -->
-  <div class="board-card">
-    <!-- 头部：所属计划 + 更换任务（图标优先，hover 有 tooltip） -->
-    <header v-if="current" class="head">
-      <p class="plan"><PhFlagBanner :size="13" /> {{ current.plan_name }}</p>
-      <button
-        type="button"
-        class="icon-btn"
-        title="更换任务"
-        @click="picking = true"
-      >
-        <PhArrowsLeftRight :size="15" />
-      </button>
+  <div class="board-card" @mouseenter="pauseAutoHide" @mouseleave="armAutoHide">
+    <!-- 头部：所属计划 + 更换任务 + 收起（图标优先，hover 有 tooltip） -->
+    <header class="head">
+      <p v-if="current" class="plan"><PhFlagBanner :size="13" /> {{ current.plan_name }}</p>
+      <div class="head-actions">
+        <button
+          v-if="current"
+          type="button"
+          class="icon-btn"
+          title="更换任务"
+          @click="picking = true"
+        >
+          <PhArrowsLeftRight :size="15" />
+        </button>
+        <button
+          type="button"
+          class="icon-btn"
+          title="收起（点击桌宠可再唤起）"
+          @click="requestDismiss"
+        >
+          <PhX :size="15" />
+        </button>
+      </div>
     </header>
 
     <main class="body">
@@ -232,6 +245,7 @@ import {
   PhFlagBanner,
   PhMinus,
   PhPlus,
+  PhX,
 } from "@phosphor-icons/vue";
 import MicroBar from "../components/MicroBar.vue";
 import {
@@ -245,7 +259,7 @@ import {
 import { hoursFromMinutes, hoursLabel, carryLabel, planErrorMessage } from "../lib/labels";
 import { isValidPercentValue } from "../lib/validation";
 import { SUMMARY_REFRESH_EVENT } from "../lib/summary";
-import { MINI_BOARD_REFRESH_EVENT } from "../lib/events";
+import { MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT } from "../lib/events";
 
 const win = getCurrentWebviewWindow();
 const view = ref<MiniBoardView | null>(null);
@@ -255,6 +269,30 @@ const toast = ref("");
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 /** 汇报/换任务进行中（防连点） */
 const busy = ref(false);
+
+/* ---- 自动隐藏（2026-08-30 反馈：小看板从常驻改按需）——亮出 10s 无交互自动收起，
+     悬停在卡上暂停（汇报/挑任务不被打断），移开重新计满；✕ 随时提前收起 ---- */
+
+/** 亮出后无交互的存活时长 */
+const AUTO_HIDE_MS = 10_000;
+let autoHideTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** （重新）计满自动隐藏：被亮出（show 事件）与悬停移开时调用 */
+function armAutoHide() {
+  clearTimeout(autoHideTimer);
+  autoHideTimer = setTimeout(requestDismiss, AUTO_HIDE_MS);
+}
+
+/** 悬停暂停：清掉在排的收起计时 */
+function pauseAutoHide() {
+  clearTimeout(autoHideTimer);
+}
+
+/** 请求收起：显隐由 PetWindow 统一持有（拖拽耦合状态在那里），看板只发请求不自己 hide */
+function requestDismiss() {
+  clearTimeout(autoHideTimer);
+  void emitTo("pet", MINI_BOARD_DISMISS_EVENT);
+}
 /** 更换任务选择器展开中 */
 const picking = ref(false);
 /** 本次增量档位（PercentAdjustControl，会话级：默认 5%，切换任务重置） */
@@ -375,8 +413,14 @@ function commitStep() {
 
 onMounted(async () => {
   await load();
-  // 大面板确认分配后刷新（MainBoard 确认时先发事件再 show 本窗口）
+  // 大面板确认分配后刷新（MainBoard 确认时先发事件；显隐与计时归 PetWindow）
   await listen(MINI_BOARD_REFRESH_EVENT, load);
+  // 被亮出（点击桌宠唤起 / 事件亮相）：回任务视图干净状态 + 启动自动隐藏计时
+  await listen(MINI_BOARD_SHOW_EVENT, () => {
+    picking.value = false;
+    editingStep.value = false;
+    armAutoHide();
+  });
   // 关闭 = 隐藏（CONTEXT 窗口关闭语义；完整语义归工单 14）
   await win.onCloseRequested(async (e) => {
     e.preventDefault();
@@ -409,6 +453,13 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 4px;
+}
+
+/* 头部动作组：空态（无计划名）时靠 margin-left:auto 仍靠右 */
+.head-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
 }
 
 .plan {

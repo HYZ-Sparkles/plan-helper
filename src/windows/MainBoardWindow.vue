@@ -114,7 +114,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { emitTo, listen } from "@tauri-apps/api/event";
-import { getCurrentWebviewWindow, WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   PhCheck,
   PhCoffee,
@@ -194,9 +194,9 @@ async function confirm() {
   try {
     await commitTodayAllocation(selected.value);
     commitError.value = "";
-    // 分配落定 → 唤醒小看板（先发刷新事件再显示，窗口读到的是最新视图）
+    // 分配落定 → 刷新小看板数据；亮板与自动隐藏计时由 PetWindow 的 refresh 监听统一执行
+    // （2026-08-30 反馈：显隐唯一持有者是桌宠，这里不再直接 show）
     await emitTo("mini-board", MINI_BOARD_REFRESH_EVENT);
-    (await WebviewWindow.getByLabel("mini-board"))?.show();
     await win.hide(); // 关闭 = 隐藏（CONTEXT 窗口关闭语义），重开入口在控制面板
   } catch (err) {
     commitError.value = planErrorMessage(err as PlanErrorShape);
