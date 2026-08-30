@@ -35,6 +35,7 @@ import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dra
 import { afterDragSteps, pickRandomKind, RANDOM_INTERVAL_MS, randomSteps, type Pose } from "../lib/pet/actions";
 import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
+import { revealWindow } from "../lib/windows";
 import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_REFRESH_EVENT } from "../lib/events";
 import { exitApp, getDailySummaryStatus, getMiniBoard, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
@@ -162,26 +163,19 @@ async function checkAutoOpen(manual: boolean) {
 }
 
 async function openMainBoard() {
-  // 重开必须带回最新数据（06 的重开语义），再复用通用的显示/聚焦
+  // 重开必须带回最新数据（06 的重开语义），再共享通道亮到前台（unminimize→show→setFocus）
   await emitTo("main-board", MAIN_BOARD_REOPEN_EVENT);
-  await openWindow("main-board");
+  await revealWindow("main-board");
 }
 
 function onMenuAction(action: MenuAction) {
   if (action === "control-panel") {
-    void openWindow("control-panel");
+    void revealWindow("control-panel");
     return;
   }
   if (engine.state().locked || phase.value !== "normal") return; // 防御：菜单禁用外的兜底
   if (action === "toggle-mode") switchMode();
   if (action === "goodbye") goodbye();
-}
-
-/** 打开（或聚焦）一个已存在的顶层窗口 */
-async function openWindow(label: string) {
-  const target = await WebviewWindow.getByLabel(label);
-  await target?.show();
-  await target?.setFocus();
 }
 
 /** 模式切换（用户动作，占锁）：过渡动画 → 对应 idle；小看板显隐联动（休息隐藏/工作恢复） */
@@ -508,8 +502,7 @@ async function positionMenu() {
   x = Math.min(Math.max(x, area.position.x), area.position.x + area.size.width - menuSize.width);
   y = Math.min(Math.max(y, area.position.y), area.position.y + area.size.height - menuSize.height);
   await menu.setPosition(new PhysicalPosition(x, y));
-  await menu.show();
-  await menu.setFocus();
+  await revealWindow("pet-menu");
 }
 </script>
 

@@ -8,15 +8,19 @@
   <section class="plans-col">
     <div class="title-row">
       <h2 class="page-title">计划管理</h2>
-      <!-- 今日总结（工单 11，story 58）：随时调出看最新版（内容从日志实时重算）；
-           优先补看待弹的，其次最近一次已弹的，从没弹过则看今天 -->
-      <button type="button" class="ghost-btn" @click="openSummary">
-        <PhChartBar :size="16" /> 今日总结
-      </button>
-      <!-- 打开大面板：重开今日分配（覆盖重选；已推进的进度从日志来不受影响） -->
-      <button type="button" class="ghost-btn" @click="openMainBoard">
-        <PhCalendarCheck :size="16" /> 打开大面板
-      </button>
+      <!-- 页面级入口聚右（2026-08-30 用户决策）：图标按钮 + 悬停原生 tooltip——
+           原文字按钮是 title-row space-between 的中间子元素，被顶到行中央且与
+           "打开大面板"主次不分。今日总结（工单 11，story 58）：随时调出看最新版
+           （内容从日志实时重算）；日期 = 待弹的 > 最近已弹的 > 今天 -->
+      <div class="title-actions">
+        <button type="button" class="icon-btn" title="今日总结" @click="openSummary">
+          <PhChartBar :size="18" />
+        </button>
+        <!-- 打开大面板：重开今日分配（覆盖重选；已推进的进度从日志来不受影响） -->
+        <button type="button" class="icon-btn" title="打开大面板（重新分配今日任务）" @click="openMainBoard">
+          <PhCalendarCheck :size="18" />
+        </button>
+      </div>
     </div>
 
     <div class="filter-bar">
@@ -70,7 +74,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { emitTo } from "@tauri-apps/api/event";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhCalendarCheck, PhChartBar } from "@phosphor-icons/vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
@@ -84,6 +87,7 @@ import { hoursFromMinutes, statusLabel } from "../lib/labels";
 import { localToday } from "../lib/validation";
 import { openDailySummaryWindow } from "../lib/summary";
 import { MAIN_BOARD_REOPEN_EVENT } from "../lib/events";
+import { revealWindow } from "../lib/windows";
 
 /** 筛选项：key + 文案 + 命中状态集（「全部」不过滤）；五个状态都是一等公民 */
 const filters: { key: string; label: string; statuses: PlanStatus[] | null }[] = [
@@ -125,13 +129,11 @@ function totalHours(p: PlanView) {
   return hoursFromMinutes(p.tasks.reduce((sum, t) => sum + (t.estimated_minutes ?? 0), 0));
 }
 
-/** 打开大面板：先发重开事件让面板刷新到最新数据，再显示并聚焦 */
+/** 打开大面板：先发重开事件让面板刷新到最新数据，再可靠地亮到前台
+ *  （revealWindow = unminimize→show→setFocus——最小化中的面板也能唤回） */
 async function openMainBoard() {
-  const board = await WebviewWindow.getByLabel("main-board");
-  if (!board) return; // 面板随应用启动创建（隐藏态），正常路径恒存在
   await emitTo("main-board", MAIN_BOARD_REOPEN_EVENT);
-  await board.show();
-  await board.setFocus();
+  await revealWindow("main-board");
 }
 
 /** 打开今日总结：日期 = 待弹的 > 最近已弹的 > 今天本地日期；
@@ -151,12 +153,18 @@ async function openSummary() {
   margin: 0 auto;
 }
 
-/* 标题行：标题在左，「打开大面板」贴右 */
+/* 标题行：标题在左，页面级入口（图标按钮）聚右 */
 .title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .filter-bar {
