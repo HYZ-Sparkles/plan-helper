@@ -41,7 +41,7 @@ import { autoDirection, PetEngine, type EngineState, type PetMover } from "../li
 import { createTauriMover } from "../lib/pet/tauriMover";
 import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dragBounds";
 import { afterDragSteps, pickRandomKind, RANDOM_INTERVAL_MS, randomSteps, type Pose } from "../lib/pet/actions";
-import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
+import { MENU_ACTION_EVENT, MENU_BLUR_EVENT, MENU_EXPIRE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
 import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
@@ -64,9 +64,16 @@ const phase = ref<"startup" | "normal" | "goodbye">("startup");
 const mode = ref<PetMode>("work");
 /** 休息模式常驻姿态（拖后是否先起身、闲坐往哪边切都看它） */
 const pose = ref<Pose>("stand");
-const menuOpen = ref(false);
-/** 菜单因失焦被关掉的时刻：紧接着的宠物点击属于"这次点击本身"，不再当开菜单 */
-let menuClosedAt = 0;
+/** 浮层（菜单/提示气泡）代数：每次亮出/按下预定自增。pet-menu 的失焦/到点回执携带
+ *  它亮出时的代数，落后于当前代数 = 已被本次点击的换形态亮出顶替，不执行隐藏——
+ *  跨窗口 hide/show 竞态的裁决点（2026-08-30 反馈：交替点击闪现的根因是两个 webview
+ *  各自发 hide/show、到达顺序不保证） */
+let floatSeq = 0;
+/** 本次按下预定的浮层代数（右键=菜单、休息左键=气泡；0=无预定）。按下即预定，让
+ *  同一次点击触发的失焦回执必然落败；pointerup 时消费或作废 */
+let reservedSeq = 0;
+/** 上次同步给浮层的锁状态（按变化发 MENU_STATE，见 engine.subscribe 内注释） */
+let lastSyncedLocked: boolean | null = null;
 /** 随机动作调度代号：每次重新排程/离开休息模式自增，旧定时器自弃 */
 let randomGen = 0;
 
@@ -75,8 +82,11 @@ const interactionsOff = () => phase.value !== "normal";
 onMounted(async () => {
   engine.subscribe((s) => {
     Object.assign(sprite, s);
-    // 菜单开着时实时同步锁状态（播放中菜单项保持禁用，PetActionExecution）
-    if (menuOpen.value) void emitTo("pet-menu", MENU_STATE_EVENT, { locked: s.locked });
+    // 锁状态变化才同步（菜单/气泡开着时项禁用态实时翻转；按变化发避免了原来每帧发一次的 IPC 刷屏）
+    if (s.locked !== lastSyncedLocked) {
+      lastSyncedLocked = s.locked;
+      void emitTo("pet-menu", MENU_STATE_EVENT, { locked: s.locked });
+    }
   });
   // 启动序列先行（不依赖位移），mover 异步就绪后补注入
   engine.request({
@@ -108,16 +118,15 @@ onMounted(async () => {
   await win.onCloseRequested((e) => e.preventDefault());
 
   await listen<{ action: MenuAction }>(MENU_ACTION_EVENT, (e) => {
-    menuOpen.value = false;
+    void hideWindow("pet-menu"); // 菜单项已点选：浮层消费掉（隐藏归桌宠，单持有者）
     onMenuAction(e.payload.action);
   });
   // 托盘退出（工单 14）：绕过 onMenuAction 的 normal 守卫——启动序列/过渡动画期间
   // 托盘退出也要生效（托盘是常驻兜底入口），占用问题由 goodbye 内部排队重试承担
   await listen(TRAY_EXIT_EVENT, () => goodbye());
-  await listen(MENU_CLOSED_EVENT, () => {
-    menuOpen.value = false;
-    menuClosedAt = performance.now();
-  });
+  // 浮层回执（失焦/气泡到点）：代数仍是当前才真藏，被换形态顶替的回执一律忽略
+  await listen<{ seq: number }>(MENU_BLUR_EVENT, (e) => onFloatGone(e.payload.seq));
+  await listen<{ seq: number }>(MENU_EXPIRE_EVENT, (e) => onFloatGone(e.payload.seq));
   // 大面板确认（06）会点亮小看板：工作模式按刚性组合就位（亮出即启动自动隐藏计时），
   // 休息模式坚持隐藏（67 休息即不工作——显隐跟着模式走，2026-08-29 反馈）
   await listen(MINI_BOARD_REFRESH_EVENT, () => {
@@ -493,6 +502,9 @@ function onPointerDown(e: PointerEvent) {
     moved: false,
     ...unitOrigin(p.x, p.y, s.width, s.height),
   };
+  // 浮层代数预定：本次点击若将亮出浮层（右键=菜单、休息左键=气泡），按下就占用新一
+  // 代数——点击引发的浮层失焦回执（旧代数）届时必被 onFloatGone 裁决落败，不执行隐藏
+  reservedSeq = drag.btn === 2 || (drag.btn === 0 && mode.value === "rest") ? ++floatSeq : 0;
   (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
 }
 
@@ -521,14 +533,20 @@ function onPointerUp() {
   drag = null;
   if (!d || !mover) return;
   if (!d.moved) {
-    // 单击分流（2026-08-30 反馈）：左键工作模式唤/收小看板（休息模式弹提示气泡）、右键菜单
+    // 单击分流（2026-08-30 反馈，设定式）：左键工作模式唤/收小看板、休息模式弹气泡；
+    // 右键亮菜单。按下时预定的浮层代数在此消费（换形态 = 旧失焦回执已落败，就地流畅切换）
+    const seq = reservedSeq;
+    reservedSeq = 0;
     if (d.btn === 0) {
       if (mode.value === "work") void toggleMiniBoard();
-      else void showRestHint();
+      else void showRestHint(seq);
     }
-    if (d.btn === 2) void toggleMenu();
+    if (d.btn === 2) void showMenu(seq);
     return;
   }
+  const seq = reservedSeq;
+  reservedSeq = 0; // 拖拽不亮浮层：按下时的预定作废
+  if (seq) void hideWindow("pet-menu"); // 预定过浮层（右键/休息左键）却拖走了：桌宠挪位，浮层一并收起
   if (d.btn !== 2) return; // 左键拖动：无动作（不吸附、不移动、无拖后动作）
   // PetDragBounds 约束 4：组合体贴近工作区边（<20px 逻辑）吸附最近边，增量同样刚性
   const appliedX = mover.position().x - d.winX;
@@ -562,19 +580,18 @@ function requestAfterDrag() {
   });
 }
 
-async function toggleMenu() {
-  if (interactionsOff()) return;
-  if (menuOpen.value) {
-    menuOpen.value = false;
-    await emitTo("pet-menu", MENU_CLOSE_EVENT);
-    return;
-  }
-  // 失焦关闭与本次点击的竞态：菜单刚因这次点击失焦关掉，不再立刻重开（否则切换失效）
-  if (performance.now() - menuClosedAt < 400) return;
-  menuOpen.value = true;
+/** 右键：亮出菜单形态（设定式——已开着就原样重亮，关闭靠失焦或点菜单项） */
+async function showMenu(seq: number) {
   const s = engine.state();
-  await emitTo("pet-menu", MENU_OPEN_EVENT, { locked: s.locked, mode: mode.value });
+  await emitTo("pet-menu", MENU_OPEN_EVENT, { locked: s.locked, mode: mode.value, seq });
   await positionMenu();
+}
+
+/** 浮层失焦/到点回执的裁决：代数仍是当前才真藏。被换形态顶替的回执（本次点击按下
+ *  时已预定新一代数）在这里落败——跨窗口 hide/show 竞态由此消解，切换不闪不吞 */
+function onFloatGone(seq: number) {
+  if (seq !== floatSeq) return;
+  void hideWindow("pet-menu");
 }
 
 /** 菜单摆到桌宠正上方（留 8px 间距），整体钳制在当前显示器工作区内 */
@@ -598,10 +615,10 @@ async function positionMenu() {
   await revealWindow("pet-menu");
 }
 
-/** 休息模式左键提示（2026-08-30 反馈）：桌宠头顶冒气泡「右键才是菜单喵」，菜单窗
- *  气泡形态自动收起（计时在菜单窗侧）。摆位/亮出与菜单共用 positionMenu */
-async function showRestHint() {
-  await emitTo("pet-menu", MENU_HINT_EVENT);
+/** 休息模式左键提示（2026-08-30 反馈）：桌宠头顶冒气泡「右键才是菜单喵」，2.5s 到点
+ *  由 pet-menu 发回执、桌宠按代数裁决隐藏。摆位/亮出与菜单共用 positionMenu */
+async function showRestHint(seq: number) {
+  await emitTo("pet-menu", MENU_HINT_EVENT, { seq });
   await positionMenu();
 }
 </script>
