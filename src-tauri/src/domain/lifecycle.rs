@@ -44,8 +44,8 @@ impl LifecycleService {
     pub fn start(conn: &Connection, plan_id: i64) -> Result<LifecycleOutcome, PlanError> {
         let tx = conn.unchecked_transaction().map_err(db_err)?;
         let priority = plan_priority(&tx, plan_id)?;
-        transition(&tx, plan_id, &[PlanStatus::NotStarted], PlanStatus::Active, None)?;
         ensure_no_higher_active(&tx, priority)?;
+        transition(&tx, plan_id, &[PlanStatus::NotStarted], PlanStatus::Active, None)?;
         let paused = preempt_lower_tiers(&tx, priority)?;
         tx.commit().map_err(db_err)?;
         Ok(LifecycleOutcome { paused })
@@ -73,8 +73,8 @@ impl LifecycleService {
     pub fn resume(conn: &Connection, plan_id: i64) -> Result<LifecycleOutcome, PlanError> {
         let tx = conn.unchecked_transaction().map_err(db_err)?;
         let priority = plan_priority(&tx, plan_id)?;
-        transition(&tx, plan_id, &[PlanStatus::Paused], PlanStatus::Active, None)?;
         ensure_no_higher_active(&tx, priority)?;
+        transition(&tx, plan_id, &[PlanStatus::Paused], PlanStatus::Active, None)?;
         let paused = preempt_lower_tiers(&tx, priority)?;
         tx.commit().map_err(db_err)?;
         Ok(LifecycleOutcome { paused })
@@ -343,8 +343,9 @@ fn auto_resume_top_tier(conn: &Connection) -> Result<(), PlanError> {
     let Some(top) = preempted.iter().map(|(_, p)| *p).max() else {
         return Ok(()); // 没有被抢占组，无需恢复
     };
-    // 恢复条件：不存在进行中的更高等级（active_top 严格低于 top，或没有任何进行中）
-    if !active_top.map_or(true, |a| a < top) {
+    // 恢复条件：不存在进行中的更高等级（active_top 严格低于 top，或没有任何进行中）；
+    // 有进行中且 ≥ top（含数据异常下的同等级并存）则不恢复
+    if active_top.is_some_and(|a| a >= top) {
         return Ok(());
     }
     for &(id, p) in &preempted {

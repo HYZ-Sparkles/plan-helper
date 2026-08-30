@@ -13,7 +13,8 @@ use crate::clock::Clock;
 use crate::domain::deps::DependencyService;
 use crate::domain::ledger::LedgerService;
 use crate::domain::plans::{
-    db_err, PauseReason, PlanError, PlanService, PlanStatus, Priority, TaskStatus,
+    db_err, PauseReason, PlanError, PlanService, PlanStatus, Priority, PlanView, TaskStatus,
+    TaskView,
 };
 use crate::domain::settings::SettingsService;
 
@@ -64,7 +65,7 @@ impl AllocationService {
     /// + 调整后目标（工单 10 含结转）。
     pub fn board(conn: &Connection, clock: &dyn Clock) -> Result<AllocationBoardView, PlanError> {
         let groups = Self::candidates(conn)?;
-        let paused_groups = Self::preempted_groups(conn)?;
+        let paused_groups = Self::paused_groups(conn)?;
         let selectable = selectable_of(&groups);
         let target = LedgerService::day_target(conn, clock)?;
         Ok(AllocationBoardView {
@@ -150,21 +151,38 @@ impl AllocationService {
 
     /// 候选分组：进行中计划（抢占不变式保证必然同等级，无需"只显示最高等级"特判——
     /// ADR-0006）→ 未完成任务 → 依赖就绪过滤（被阻塞的不展示）。
-    /// 排序直接复用 PlanService::list 的 PlanOrdering；就绪判定复用 DependencyService。
     fn candidates(conn: &Connection) -> Result<Vec<AllocationGroup>, PlanError> {
+        Self::groups_of(conn, |p| p.status == PlanStatus::Active, |conn, t| {
+            // 前置未完成：不进入大面板（解锁当日自然回到列表）
+            DependencyService::is_unblocked(conn, t.id)
+        })
+    }
+
+    /// 暂停分组（AutoPauseFeedback 第一层，工单 12）：被自动抢占暂停的计划灰显展示
+    /// 其未完成任务，不可勾选（候选求交不含它们，勾选状态天然为空）。
+    /// 高等级清空后自动恢复，届时该组随重取回到候选列表。
+    fn paused_groups(conn: &Connection) -> Result<Vec<AllocationGroup>, PlanError> {
+        Self::groups_of(
+            conn,
+            |p| p.status == PlanStatus::Paused && p.pause_reason == Some(PauseReason::AutoPreempted),
+            |_, _| Ok(true),
+        )
+    }
+
+    /// 分组装配的共享形态（candidates 与 paused_groups 共用，AGENTS.md 复用纪律）：
+    /// PlanService::list 的 PlanOrdering 排序 → plan_filter 选计划 → 未完成任务映射成
+    /// 候选行（keep_task 返回 false 剔除单任务）→ 空组跳过。
+    fn groups_of(
+        conn: &Connection,
+        plan_filter: impl Fn(&PlanView) -> bool,
+        keep_task: impl Fn(&Connection, &TaskView) -> Result<bool, PlanError>,
+    ) -> Result<Vec<AllocationGroup>, PlanError> {
         let mut groups = Vec::new();
-        for plan in PlanService::list(conn)?
-            .into_iter()
-            .filter(|p| p.status == PlanStatus::Active)
-        {
+        for plan in PlanService::list(conn)?.into_iter().filter(|p| plan_filter(p)) {
             let mut tasks = Vec::new();
-            for t in plan
-                .tasks
-                .iter()
-                .filter(|t| t.status != TaskStatus::Completed)
-            {
-                if !DependencyService::is_unblocked(conn, t.id)? {
-                    continue; // 前置未完成：不进入大面板（解锁当日自然回到列表）
+            for t in plan.tasks.iter().filter(|t| t.status != TaskStatus::Completed) {
+                if !keep_task(conn, t)? {
+                    continue;
                 }
                 tasks.push(AllocationTask {
                     id: t.id,
@@ -172,40 +190,6 @@ impl AllocationService {
                     estimated_minutes: t.estimated_minutes.unwrap_or(0),
                 });
             }
-            if !tasks.is_empty() {
-                groups.push(AllocationGroup {
-                    plan_id: plan.id,
-                    plan_name: plan.name,
-                    priority: plan.priority,
-                    tasks,
-                });
-            }
-        }
-        Ok(groups)
-    }
-
-    /// 暂停分组（AutoPauseFeedback 第一层，工单 12）：被自动抢占暂停的计划灰显展示
-    /// 其未完成任务，不可勾选（候选求交不含它们，勾选状态天然为空）。
-    /// 高等级清空后自动恢复，届时该组随重取回到候选列表。
-    fn preempted_groups(conn: &Connection) -> Result<Vec<AllocationGroup>, PlanError> {
-        let mut groups = Vec::new();
-        for plan in PlanService::list(conn)?
-            .into_iter()
-            .filter(|p| {
-                p.status == PlanStatus::Paused
-                    && p.pause_reason == Some(PauseReason::AutoPreempted)
-            })
-        {
-            let tasks: Vec<AllocationTask> = plan
-                .tasks
-                .iter()
-                .filter(|t| t.status != TaskStatus::Completed)
-                .map(|t| AllocationTask {
-                    id: t.id,
-                    name: t.name.clone(),
-                    estimated_minutes: t.estimated_minutes.unwrap_or(0),
-                })
-                .collect();
             if !tasks.is_empty() {
                 groups.push(AllocationGroup {
                     plan_id: plan.id,

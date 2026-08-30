@@ -63,7 +63,7 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
     case "PlanStatusInvalid":
       return "当前计划状态不允许此操作";
     case "PreemptedByHigher":
-      return `存在进行中的更高优先级计划「${payload.plan_name ?? ""}」，请先完成或手动暂停它`;
+      return preemptedByHigherMessage(payload.plan_name ?? "");
     case "PlanNotTerminal":
       return "只有已完成或已放弃的计划可以复制并新建";
     case "TasksNotCompleted":
@@ -97,6 +97,11 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
     default:
       return "未知错误";
   }
+}
+
+/** 抢占不变式的开始约束文案（PreemptedByHigher 错误提示与详情页禁用 tooltip 共用一份，防措辞漂移） */
+export function preemptedByHigherMessage(planName: string): string {
+  return `存在进行中的更高优先级计划「${planName}」，请先完成或手动暂停它`;
 }
 
 /** 分钟 → 小时展示（一位小数 round，与 ProgressGranularity 0.1% 颗粒度对齐）：

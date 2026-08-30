@@ -283,7 +283,7 @@ import {
   type Priority,
   type TaskView,
 } from "../lib/api";
-import { hoursFromMinutes, pauseReasonLabel, planErrorMessage } from "../lib/labels";
+import { hoursFromMinutes, pauseReasonLabel, planErrorMessage, preemptedByHigherMessage } from "../lib/labels";
 import { taskProgress, taskProgressLabel } from "../lib/progress";
 import { isValidPercentValue } from "../lib/validation";
 import { MAIN_BOARD_REFRESH_EVENT, MINI_BOARD_REFRESH_EVENT } from "../lib/events";
@@ -328,11 +328,9 @@ const higherActive = computed<PlanView | null>(() => {
   );
 });
 
-/** 禁用 tooltip 的原因说明（span 承载——disabled 按钮不冒泡 hover） */
+/** 禁用 tooltip 的原因说明（span 承载——disabled 按钮不冒泡 hover；文案与错误提示同源） */
 const lifecycleBlockedTitle = computed(() =>
-  higherActive.value
-    ? `存在进行中的更高优先级计划「${higherActive.value.name}」，请先完成或暂停它`
-    : undefined,
+  higherActive.value ? preemptedByHigherMessage(higherActive.value.name) : undefined,
 );
 
 /** 已推进的小时数（子目标任务按已完成子目标耗时；无子目标任务的汇报 07 接线后计入） */
