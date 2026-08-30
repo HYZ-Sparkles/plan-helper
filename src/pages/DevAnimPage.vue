@@ -283,8 +283,12 @@ async function copySnippet() {
 
         <div class="controls">
           <button class="ghost-btn" @click="playing ? stop() : play()">{{ playing ? "暂停" : "播放" }}</button>
-          <button class="ghost-btn" :disabled="playing" @click="stepFrame(-1)">◀ 帧</button>
-          <button class="ghost-btn" :disabled="playing" @click="stepFrame(1)">帧 ▶</button>
+          <button class="ghost-btn" :disabled="playing" @click="stepFrame(-1)" title="上一帧">
+            <PhCaretLeft :size="14" /> 帧
+          </button>
+          <button class="ghost-btn" :disabled="playing" @click="stepFrame(1)" title="下一帧">
+            帧 <PhCaretRight :size="14" />
+          </button>
           <label class="ctl">fps <input v-model.number="fps" type="range" min="1" max="24" /> {{ fps }}</label>
           <label class="ctl"><input v-model="loop" type="checkbox" /> 循环</label>
           <label class="ctl"><input v-model="flip" type="checkbox" /> 翻转</label>

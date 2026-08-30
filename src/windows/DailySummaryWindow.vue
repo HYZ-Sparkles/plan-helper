@@ -8,89 +8,95 @@
   -->
   <div class="summary">
     <header class="summary-header">
-      <div>
-        <h1 class="title">{{ titleLabel }}</h1>
-        <p class="hint">当日推进按工作窗口开始日归属；撤销与修正已实时重算</p>
+      <!-- 内容列限宽居中（与大面板同款全局 .content-col，2026-08-30 反馈：最大化后不横跨整屏） -->
+      <div class="header-inner content-col">
+        <div>
+          <h1 class="title">{{ titleLabel }}</h1>
+          <p class="hint">当日推进按工作窗口开始日归属；撤销与修正已实时重算</p>
+        </div>
+        <p class="date">{{ dateLabel }}</p>
       </div>
-      <p class="date">{{ dateLabel }}</p>
     </header>
 
     <main class="summary-body">
-      <p v-if="loadError" class="error">{{ loadError }}</p>
-      <p v-else-if="!summary" class="hint loading">加载中…</p>
+      <!-- 滚动收进列自身（content-col-scroll）：与大面板同款，滚动条贴列右缘三段对齐不漂移 -->
+      <div class="content-col content-col-scroll thin-scrollbar">
+        <p v-if="loadError" class="error">{{ loadError }}</p>
+        <p v-else-if="!summary" class="hint loading">加载中…</p>
 
-      <template v-else>
-        <!-- 总览行：N 计划 / 完成 X / 目标 Y（含结转标注）/ 进度条 -->
-        <section class="overview">
-          <div class="stat">
-            <span class="stat-num">{{ summary.plans.length }}</span>
-            <span class="stat-unit">推进计划</span>
-          </div>
-          <div class="stat">
-            <PhCheckCircle :size="18" class="stat-icon done" />
-            <span class="stat-num">{{ hoursLabel(summary.total_minutes) }}</span>
-            <span class="stat-unit">完成小时</span>
-          </div>
-          <div v-if="summary.workday" class="stat">
-            <PhTarget :size="18" class="stat-icon" />
-            <span class="stat-num">{{ hoursLabel(summary.target_minutes) }}</span>
-            <span class="stat-unit">目标小时</span>
-            <span v-if="carryText" class="carry-note">（{{ carryText }}）</span>
-          </div>
-          <MicroBar
-            v-if="summary.workday"
-            class="overview-bar"
-            :ratio="summary.target_minutes > 0 ? summary.total_minutes / summary.target_minutes : 0"
-            :reached="summary.total_minutes >= summary.target_minutes"
-          />
-        </section>
-        <p v-if="!summary.workday" class="hint overtime-note">
-          休息日加班：推进按超额并入工时账户，无目标义务
-        </p>
-
-        <!-- 有更高优先级计划未开始（不忘主次） -->
-        <p v-if="summary.higher_priority_hint" class="priority-hint">
-          <PhCaretUp :size="14" /> 有更高优先级的计划还未开始
-        </p>
-
-        <!-- 空态：当日没有任何推进 -->
-        <div v-if="summary.plans.length === 0" class="empty">
-          <PhCoffee :size="26" />
-          <p>这一天没有推进记录</p>
-        </div>
-
-        <!-- 计划 section（第一层）→ 任务行（第二层）→ 推进内容（第三层） -->
-        <section v-for="p in summary.plans" :key="p.plan_id" class="plan">
-          <header class="plan-head">
-            <PhFlag :size="15" class="plan-flag" />
-            <span class="plan-name">{{ p.plan_name }}</span>
-            <PriorityLabel :priority="p.priority" />
-            <span v-if="p.preempted" class="preempted-tag">已被抢占暂停</span>
-            <span class="plan-minutes">{{ hoursFromMinutes(p.minutes) }} 小时</span>
-          </header>
-          <div v-for="t in p.tasks" :key="t.task_id" class="task">
-            <div class="task-row">
-              <span class="task-name">{{ t.name }}</span>
-              <span class="task-percent">{{ t.percent }}%</span>
-              <span class="task-minutes">{{ hoursFromMinutes(t.minutes) }} 小时</span>
+        <template v-else>
+          <!-- 总览行：N 计划 / 完成 X / 目标 Y（含结转标注）/ 进度条 -->
+          <section class="overview">
+            <div class="stat">
+              <span class="stat-num">{{ summary.plans.length }}</span>
+              <span class="stat-unit">推进计划</span>
             </div>
-            <div class="task-detail">
-              <template v-if="t.has_subgoals">
-                <span v-for="sg in completedOf(t)" :key="sg.id" class="sg done">
-                  <PhCheck :size="12" weight="bold" /> {{ sg.name }}
-                </span>
-                <span v-if="doingOf(t)" class="sg doing">{{ doingOf(t)!.name }} 进行中</span>
-              </template>
-              <MicroBar
-                v-else
-                class="task-bar"
-                :ratio="t.percent / 100"
-                :reached="t.percent >= 100"
-              />
+            <div class="stat">
+              <PhCheckCircle :size="18" class="stat-icon done" />
+              <span class="stat-num">{{ hoursLabel(summary.total_minutes) }}</span>
+              <span class="stat-unit">完成小时</span>
             </div>
+            <div v-if="summary.workday" class="stat">
+              <PhTarget :size="18" class="stat-icon" />
+              <span class="stat-num">{{ hoursLabel(summary.target_minutes) }}</span>
+              <span class="stat-unit">目标小时</span>
+              <span v-if="carryText" class="carry-note">（{{ carryText }}）</span>
+            </div>
+            <MicroBar
+              v-if="summary.workday"
+              class="overview-bar"
+              :ratio="summary.target_minutes > 0 ? summary.total_minutes / summary.target_minutes : 0"
+              :reached="summary.total_minutes >= summary.target_minutes"
+            />
+          </section>
+          <p v-if="!summary.workday" class="hint overtime-note">
+            休息日加班：推进按超额并入工时账户，无目标义务
+          </p>
+
+          <!-- 有更高优先级计划未开始（不忘主次） -->
+          <p v-if="summary.higher_priority_hint" class="priority-hint">
+            <PhCaretUp :size="14" /> 有更高优先级的计划还未开始
+          </p>
+
+          <!-- 空态：当日没有任何推进 -->
+          <div v-if="summary.plans.length === 0" class="empty">
+            <PhCoffee :size="26" />
+            <p>这一天没有推进记录</p>
           </div>
-        </section>
-      </template>
+
+          <!-- 计划 section（第一层）→ 任务行（第二层）→ 推进内容（第三层） -->
+          <section v-for="p in summary.plans" :key="p.plan_id" class="plan">
+            <header class="plan-head">
+              <PhFlag :size="15" class="plan-flag" />
+              <span class="plan-name">{{ p.plan_name }}</span>
+              <PriorityLabel :priority="p.priority" />
+              <span v-if="p.preempted" class="preempted-tag">已被抢占暂停</span>
+              <span class="plan-minutes">{{ hoursFromMinutes(p.minutes) }} 小时</span>
+            </header>
+            <div v-for="t in p.tasks" :key="t.task_id" class="task">
+              <div class="task-row">
+                <span class="task-name">{{ t.name }}</span>
+                <span class="task-percent">{{ t.percent }}%</span>
+                <span class="task-minutes">{{ hoursFromMinutes(t.minutes) }} 小时</span>
+              </div>
+              <div class="task-detail">
+                <template v-if="t.has_subgoals">
+                  <span v-for="sg in completedOf(t)" :key="sg.id" class="sg done">
+                    <PhCheck :size="12" weight="bold" /> {{ sg.name }}
+                  </span>
+                  <span v-if="doingOf(t)" class="sg doing">{{ doingOf(t)!.name }} 进行中</span>
+                </template>
+                <MicroBar
+                  v-else
+                  class="task-bar"
+                  :ratio="t.percent / 100"
+                  :reached="t.percent >= 100"
+                />
+              </div>
+            </div>
+          </section>
+        </template>
+      </div>
     </main>
   </div>
 </template>
@@ -186,20 +192,25 @@ onMounted(async () => {
 
 <style scoped>
 .summary {
+  --col-max: 564px; /* 内容列宽 = 默认 620 窗口 − 2×28 padding（tokens.css .content-col 消费） */
   display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--bg-base);
 }
 
-/* ---- 头部：标题 + 归属日期（同大面板头部节奏） ---- */
+/* ---- 头部：标题 + 归属日期（同大面板头部节奏）----
+   窗口可最大化：线条（下边框）通栏，内容收进限宽居中列（全局 .content-col）——拉大不散架 */
 .summary-header {
+  padding: 24px 28px 16px;
+  border-bottom: var(--border-default);
+}
+
+.header-inner {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 24px 28px 16px;
-  border-bottom: var(--border-default);
 }
 
 .title {
@@ -219,10 +230,10 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
+/* 滚动归内容列 .content-col-scroll，本体只留框架（与大面板同款） */
 .summary-body {
   flex: 1;
   min-height: 0;
-  overflow: auto;
   padding: 20px 28px;
 }
 

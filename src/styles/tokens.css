@@ -283,3 +283,33 @@ button:focus-visible {
   justify-content: flex-end;
   gap: 10px;
 }
+
+/* ---- 可缩放窗口的内容列（工单 15：最大化后内容居中不横跨整屏）----
+   头/底的线条与底色通栏、内容收进限宽居中列；列宽由窗口根上的 --col-max 决定
+   （大面板 724px = 默认 780 − 2×28 padding，总结 564px = 620 − 56），默认窗口外观不变。 */
+.content-col {
+  max-width: var(--col-max);
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
+
+/* 主体档：滚动收进内容列自身——滚动条贴列右缘，头/体/底三段对齐不因滚动条出现而漂移 */
+.content-col-scroll {
+  max-height: 100%;
+  overflow-y: auto;
+}
+
+/* 细滚动条（内容列/浮层列表共用）：WebView 默认粗条破坏线条基调 */
+.thin-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-sm);
+  background: var(--text-muted);
+}
+
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}

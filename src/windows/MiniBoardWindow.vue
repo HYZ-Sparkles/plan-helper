@@ -43,7 +43,7 @@
            组列表独立滚动，标题与“返回”钉在卡内 -->
       <div v-else-if="picking" class="picker">
         <p class="picker-title">从今日推进里挑一个</p>
-        <div class="picker-list">
+        <div class="picker-list thin-scrollbar">
           <p v-if="view.pickers.length === 0" class="hint">
             今日推进列表里没有可换的任务——去大面板重新分配
           </p>
@@ -688,7 +688,8 @@ onMounted(async () => {
   gap: 10px;
 }
 
-/* 组列表滚动区（2026-08-28 验收修订：任务多时要能滚到，标题/返回不跟着滚） */
+/* 组列表滚动区（2026-08-28 验收修订：任务多时要能滚到，标题/返回不跟着滚）；
+   细滚动条走 tokens.css 全局 .thin-scrollbar（原 scoped 版已收编全局） */
 .picker-list {
   flex: 1;
   min-height: 0;
@@ -697,20 +698,6 @@ onMounted(async () => {
   gap: 10px;
   overflow-y: auto;
   padding-right: 4px; /* 行与滚动条之间的呼吸空间 */
-}
-
-/* 细滚动条：透明浮层卡片里 WebView 默认粗条太突兀 */
-.picker-list::-webkit-scrollbar {
-  width: 6px;
-}
-
-.picker-list::-webkit-scrollbar-thumb {
-  border-radius: var(--radius-sm);
-  background: var(--text-muted);
-}
-
-.picker-list::-webkit-scrollbar-track {
-  background: transparent;
 }
 
 .picker-title {

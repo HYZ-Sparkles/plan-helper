@@ -329,7 +329,7 @@ async function save() {
 
 .tag.work {
   color: var(--color-done);
-  border-color: var(--color-success);
+  border-color: var(--color-done);
   background: var(--bg-group);
 }
 

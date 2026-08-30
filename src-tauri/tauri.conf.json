@@ -55,6 +55,8 @@
         "title": "今日分配",
         "width": 780,
         "height": 680,
+        "minWidth": 560,
+        "minHeight": 480,
         "center": true,
         "visible": false
       },
@@ -63,6 +65,8 @@
         "title": "今日总结",
         "width": 620,
         "height": 680,
+        "minWidth": 520,
+        "minHeight": 480,
         "center": true,
         "visible": false
       },
