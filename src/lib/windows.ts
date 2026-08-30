@@ -14,7 +14,12 @@ import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 export async function revealWindow(label: string): Promise<boolean> {
   const win = await WebviewWindow.getByLabel(label);
   if (!win) return false;
-  await win.unminimize();
+  try {
+    await win.unminimize();
+  } catch {
+    // unminimize 单独容错：权限缺失/平台不支持时降级为原 show+setFocus 行为，
+    // 不拖死整条弹窗链（2026-08-30 曾因 capabilities 未授权 unminimize 让所有弹窗失效）
+  }
   await win.show();
   await win.setFocus();
   return true;
