@@ -21,3 +21,7 @@ export const MENU_STATE_EVENT = "pet-menu:state";
 export const MENU_CLOSE_EVENT = "pet-menu:close";
 export const MENU_CLOSED_EVENT = "pet-menu:closed";
 export const MENU_ACTION_EVENT = "pet-menu:action";
+
+/** 托盘退出 → 桌宠告别（工单 14）：Rust 托盘「退出」发出（src-tauri/src/lib.rs
+ *  TRAY_EXIT_EVENT 对应），PetWindow 收到后走与菜单「再见」同一 goodbye 通道 */
+export const TRAY_EXIT_EVENT = "pet:tray-exit";

@@ -43,6 +43,11 @@ onMounted(async () => {
     locked.value = e.payload.locked;
   });
   await listen(MENU_CLOSE_EVENT, hide);
+  // 关闭请求拦截为隐藏：菜单窗被 Alt+F4 摧毁后菜单功能就废了，收起语义 = 隐藏（同工单 14 关闭语义）
+  await win.onCloseRequested(async (e) => {
+    e.preventDefault();
+    await hide();
+  });
   // 失焦即关：点击桌面/其它窗口 = 收起菜单（tauri://blur 是窗口级事件）
   await win.listen("tauri://blur", async () => {
     await hide();

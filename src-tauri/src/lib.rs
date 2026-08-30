@@ -13,7 +13,13 @@ use domain::progress::ProgressService;
 use domain::settings::SettingsService;
 use infra::db;
 use std::sync::Mutex;
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager};
+
+/// 托盘退出 → 桌宠告别事件的通道名（与 src/lib/pet/menu.ts 的 TRAY_EXIT_EVENT 对应，
+/// 跨端字符串各写一份、注释互指）
+const TRAY_EXIT_EVENT: &str = "pet:tray-exit";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -40,6 +46,7 @@ pub fn run() {
                 clock: Box::new(SystemClock),
             });
             position_pet_and_board(app)?;
+            setup_tray(app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -104,4 +111,53 @@ fn position_pet_and_board(app: &tauri::App) -> Result<(), Box<dyn std::error::Er
         ))?;
     }
     Ok(())
+}
+
+/// 系统托盘（工单 14，SystemTray）：左键单击开控制面板；右键菜单「打开控制面板」「退出」。
+/// 退出不在这里退进程——只向桌宠窗口发告别事件，跳箱动画（Oreo Cat 帧 17）播完由前端
+/// 走 exit_app 统一退出，与桌宠菜单「再见」共用同一通道（两条退出路径等价性由此保证）。
+fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
+    let open = MenuItem::with_id(app, "open", "打开控制面板", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let mut tray = TrayIconBuilder::with_id("tray")
+        .tooltip("任务帮手")
+        .menu(&menu)
+        .show_menu_on_left_click(false) // 左键让给「打开控制面板」，菜单只归右键
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "open" => reveal_control_panel(app),
+            "quit" => request_exit(app),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            // 左键抬起才算单击（按住拖出菜单区域不误触）
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                reveal_control_panel(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+/// 控制面板亮到前台。unminimize → show → set_focus 与前端 revealWindow（src/lib/windows.ts）
+/// 同序：Windows 上 show 对最小化窗口无效，必须先 unminimize（2026-08-30 弹窗失效教训）。
+fn reveal_control_panel(app: &tauri::AppHandle) {
+    if let Some(panel) = app.get_webview_window("control-panel") {
+        let _ = panel.unminimize();
+        let _ = panel.show();
+        let _ = panel.set_focus();
+    }
+}
+
+/// 托盘退出：向桌宠窗口发告别事件（跳箱动画播完由前端调 exit_app 关闭全部窗口并退进程）
+fn request_exit(app: &tauri::AppHandle) {
+    let _ = app.emit_to("pet", TRAY_EXIT_EVENT, ());
 }

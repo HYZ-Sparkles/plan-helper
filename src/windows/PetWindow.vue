@@ -12,7 +12,8 @@
  * - 随机动作（09，PetRandomAction）：休息模式距上一次（用户或随机）动作结束 300s 抽取，
  *   吃:跳:闲坐 = 4:3:3；系统动作不占锁、仅空闲发起、可被用户动作抢占（引擎裁决）；
  *   播放中硬切由引擎 flick 计数驱动 PetSprite 快速淡出淡入
- * - 再见：17 Jump in to the Box 播完 → exitApp()（关闭全部窗口）
+ * - 再见（菜单「再见」/ 托盘「退出」共用通道，工单 14）：17 Jump in to the Box 播完 →
+ *   exitApp()（关闭全部窗口）；动画占用时等播完再接（重试），保证常驻托盘入口永远有效
  * - 拖拽（09，PetDragBounds）：moveTo 每帧经 dragBounds 钳制（任务栏禁入/全可见/跨屏
  *   重叠面积选屏），松手 <20px 吸附最近工作区边缘；拖动期间 freeze 保持当前帧不动、
  *   松手 unfreeze 继续（不打断播放状态）；小看板可见时与桌宠成**刚性组合体**按整体
@@ -36,7 +37,7 @@ import { autoDirection, PetEngine, type EngineState, type PetMover } from "../li
 import { createTauriMover } from "../lib/pet/tauriMover";
 import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dragBounds";
 import { afterDragSteps, pickRandomKind, RANDOM_INTERVAL_MS, randomSteps, type Pose } from "../lib/pet/actions";
-import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
+import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
 import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_REFRESH_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
@@ -106,6 +107,9 @@ onMounted(async () => {
     menuOpen.value = false;
     onMenuAction(e.payload.action);
   });
+  // 托盘退出（工单 14）：绕过 onMenuAction 的 normal 守卫——启动序列/过渡动画期间
+  // 托盘退出也要生效（托盘是常驻兜底入口），占用问题由 goodbye 内部排队重试承担
+  await listen(TRAY_EXIT_EVENT, () => goodbye());
   await listen(MENU_CLOSED_EVENT, () => {
     menuOpen.value = false;
     menuClosedAt = performance.now();
@@ -294,16 +298,28 @@ function fireRandom(gen: number) {
   if (!ok) armRandom();
 }
 
-/** 再见：跳箱动画播完退出整个应用（关闭全部窗口）。占锁失败不进告别态（否则交互全禁却永不退出） */
+/** 再见请求被动画占用拒绝后的重试间隔：等当前动作播完再接跳箱（动画最长数秒，轮询开销可忽略） */
+const GOODBYE_RETRY_MS = 300;
+
+/** 再见：跳箱动画播完退出整个应用（关闭全部窗口）。菜单「再见」与托盘「退出」（工单 14）
+ *  共用：已在告别中忽略（双入口去重）；动画锁/启动序列占用时重试排队——占锁失败若直接
+ *  放弃，交互全禁却永不退出。告别期间一切自动触发静默（总结/开窗定时作废，防止告别
+ *  动画的最后一秒弹出总结窗并把"已弹"登记进库）。 */
 function goodbye() {
+  if (phase.value === "goodbye") return;
   const ok = engine.request({
     lock: true,
     steps: [{ anim: 17 }], // Jump in to the Box
     onSettle: () => void exitApp(),
   });
-  if (!ok) return;
+  if (!ok) {
+    window.setTimeout(goodbye, GOODBYE_RETRY_MS);
+    return;
+  }
   phase.value = "goodbye";
   randomGen++;
+  summaryGen++;
+  windowStartGen++;
 }
 
 /* ---- 今日总结触发（工单 11，DailySummaryTrigger）：最晚窗口结束自动弹 / 次日首开补登 ---- */
