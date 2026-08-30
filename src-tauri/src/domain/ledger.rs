@@ -20,8 +20,8 @@ use serde::Serialize;
 
 use crate::clock::Clock;
 use crate::domain::plans::{db_err, PlanError};
-use crate::domain::progress::{attributed_date, round_delta_minutes};
-use crate::domain::settings::{SettingsService, TimeWindow};
+use crate::domain::progress::{attributed_date_on, round_delta_minutes};
+use crate::domain::settings::{SettingsCalendar, SettingsService};
 
 /// ±10% 达标容差（DailyCompletionTolerance），带内差额豁免；浮点边界比较容差 1e-9。
 const TOLERANCE: f64 = 0.10;
@@ -49,25 +49,29 @@ impl LedgerService {
 
     /// 指定日期的调整后目标（11 的今日总结按**总结归属日**取目标——补登昨日时
     /// 口径仍是"那天该完成多少"，历史修正后同样实时重算）。
+    /// 基准与"是否工作日"逐日按该日期的生效配置解析（工单 13 SettingsEffectiveTime：
+    /// 历史日与当日维持保存时原值，未来的新配置不追溯改写账户）。
     pub fn day_target_on(conn: &Connection, today: NaiveDate) -> Result<DayTarget, PlanError> {
-        let settings = SettingsService::load(conn).map_err(db_err)?;
-        let base = settings.daily_minutes as f64;
-        let minutes = minutes_by_day(conn, &settings.time_windows)?;
+        let cal = SettingsService::calendar(conn).map_err(db_err)?;
+        let s_today = cal.for_date(today);
+        let minutes = minutes_by_day(conn, &cal)?;
         let Some(anchor) = minutes.keys().next().copied() else {
-            return Ok(base_target(settings.daily_minutes)); // 无任何进度事件：账户无历史
+            return Ok(base_target(s_today.daily_minutes)); // 无任何进度事件：账户无历史
         };
-        let window = settings.smoothing_workdays.max(1) as usize;
+        // 均分窗口立即生效（不进版本历史）：永远取最新保存值
+        let window = cal.latest.smoothing_workdays.max(1) as usize;
         // 滚动窗口（定长 window）：slots[i] = 第 i+1 个未来工作日将接收的结转份额。
         // 每过一个工作日队首出队、尾部补 0；一笔差额入账时给全部 W 位各加 debt/W
         //（= 均分到后续 W 个工作日），O(天数) 完成回放。
         let mut slots: VecDeque<f64> = vec![0.0; window].into();
         let mut day = anchor;
         while day < today {
+            let s = cal.for_date(day);
             let actual = minutes.get(&day).copied().unwrap_or(0.0);
-            let debt = if settings.is_workday_on(day) {
+            let debt = if s.is_workday_on(day) {
                 let landing = slots.pop_front().unwrap_or(0.0); // 工作日消费一个窗口位
                 slots.push_back(0.0);
-                day_debt(actual, base + landing)
+                day_debt(actual, f64::from(s.daily_minutes) + landing)
             } else {
                 -actual // 非工作日：无目标义务、不消费窗口；有推进全额按超额并入（负 = 抵扣）
             };
@@ -78,14 +82,14 @@ impl LedgerService {
             day += Duration::days(1);
         }
         // 今天：工作日接收窗口内份额；非工作日无义务（份额留给下一个工作日）
-        let carry = if settings.is_workday_on(today) {
+        let carry = if s_today.is_workday_on(today) {
             slots.front().copied().unwrap_or(0.0)
         } else {
             0.0
         };
         Ok(DayTarget {
-            base_minutes: settings.daily_minutes,
-            target_minutes: round_delta_minutes(base + carry),
+            base_minutes: s_today.daily_minutes,
+            target_minutes: round_delta_minutes(f64::from(s_today.daily_minutes) + carry),
         })
     }
 }
@@ -102,10 +106,11 @@ fn day_debt(actual: f64, target: f64) -> f64 {
 
 /// 全量扫描进度日志，按事件归属日（ADR-0009 跨午夜口径）聚合每日完成分钟数。
 /// 结算回放与 progress 域的"今日完成量"共用同一聚合；日志量级每日几十条，不建汇总表。
-/// 窗口由调用方传入（与调用方自身的设置读取合并，避免重复查询）。
+/// 归属按**事件所在日期与其前一日的生效配置**解析（工单 13：窗口变更自下一个工作日
+/// 生效后，历史事件的跨午夜归属仍由当时的窗口决定——窗口开始日拥有整段窗口）。
 pub(crate) fn minutes_by_day(
     conn: &Connection,
-    windows: &[TimeWindow],
+    cal: &SettingsCalendar,
 ) -> Result<BTreeMap<NaiveDate, f64>, PlanError> {
     let mut stmt = conn
         .prepare("SELECT at, delta_minutes FROM progress_log")
@@ -118,9 +123,8 @@ pub(crate) fn minutes_by_day(
     let mut by_day: BTreeMap<NaiveDate, f64> = BTreeMap::new();
     for (raw, delta) in rows {
         if let Ok(at) = DateTime::parse_from_rfc3339(&raw) {
-            *by_day
-                .entry(attributed_date(at.with_timezone(&Local), windows))
-                .or_default() += delta;
+            let day = attributed_date_on(at.with_timezone(&Local), cal);
+            *by_day.entry(day).or_default() += delta;
         }
     }
     Ok(by_day)

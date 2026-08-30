@@ -10,12 +10,19 @@ export interface TimeWindow {
   end_minute: number;
 }
 
+/** 一条日期例外（DateOverride）：把某日期双向覆盖周循环 */
+export interface DateOverride {
+  date: string; // YYYY-MM-DD
+  working: boolean; // true = 这天工作（调休）/ false = 这天不工作（假期）
+}
+
 /** 全局设置（对应 domain::settings::Settings） */
 export interface Settings {
   daily_minutes: number;
   workdays: number[]; // 周一=1 .. 周日=7
   time_windows: TimeWindow[];
   smoothing_workdays: number;
+  date_overrides: DateOverride[];
 }
 
 /** 启动快照（对应 domain::app_state::AppStateView） */
@@ -27,6 +34,20 @@ export interface AppStateView {
 /** 示例接缝命令：读启动快照（设置 + 服务端时间） */
 export function getAppState(): Promise<AppStateView> {
   return invoke<AppStateView>("get_app_state");
+}
+
+/* ---- 设置（工单 13）---- */
+
+/** 保存设置（覆盖式），返回延时字段（工作时间/工作日/窗口）的生效日 YYYY-MM-DD：
+ *  等于今天 = 无延时变更，否则设置页提示"自 X 起生效"。均分窗口与日期例外立即生效 */
+export function saveSettings(settings: Settings): Promise<string> {
+  return invoke<string>("save_settings", { settings });
+}
+
+/** 下一个工作窗口开始时刻（RFC3339 或 null）：桌宠心跳据此排程
+ *  "工作窗口开始时"的 AutoOpenMainBoard 触发；null = 未配置窗口，永不触发 */
+export function getNextWindowStart(): Promise<string | null> {
+  return invoke<string | null>("get_next_window_start");
 }
 
 /* ---- 桌宠（工单 08）---- */

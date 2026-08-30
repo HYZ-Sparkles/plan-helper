@@ -91,3 +91,51 @@ pub fn force_pause_reason(conn: &rusqlite::Connection, plan_id: i64, reason: Opt
     )
     .unwrap();
 }
+
+/// 把设置固定为"自从有设置以来一直如此"（工单 13 生效时机的测试种子）。
+/// `SettingsService::save` 的延时字段自下一个工作日生效，会把当日判定留在旧值——
+/// 测试要的是"配置早已稳定"这条生产前提，所以直改存储：设置行 UPDATE +
+/// 日期例外全量替换 + 版本历史重置为一条生效日极早的种子
+///（`SettingsCalendar::for_date` 对任何日期都解析到它）。
+/// 注意 save 是 UPDATE-only——先 load 落默认行（同应用启动 get_app_state 的前置）。
+/// 造一个 NaiveDate（日期例外等按日字段的测试种子）
+pub fn d(y: i32, mo: u32, da: u32) -> chrono::NaiveDate {
+    chrono::NaiveDate::from_ymd_opt(y, mo, da).unwrap()
+}
+
+pub fn force_settings(conn: &rusqlite::Connection, s: &plan_helper_lib::domain::settings::Settings) {
+    use plan_helper_lib::domain::settings::{SettingsService, SENTINEL_EFFECTIVE};
+
+    SettingsService::load(conn).unwrap();
+    conn.execute(
+        "UPDATE settings SET daily_minutes = ?1, workdays = ?2, time_windows = ?3,
+         smoothing_workdays = ?4 WHERE id = 1",
+        rusqlite::params![
+            s.daily_minutes,
+            serde_json::to_string(&s.workdays).unwrap(),
+            serde_json::to_string(&s.time_windows).unwrap(),
+            s.smoothing_workdays,
+        ],
+    )
+    .unwrap();
+    conn.execute("DELETE FROM date_overrides", []).unwrap();
+    for o in &s.date_overrides {
+        conn.execute(
+            "INSERT OR IGNORE INTO date_overrides (date, working) VALUES (?1, ?2)",
+            rusqlite::params![o.date.to_string(), i64::from(o.working)],
+        )
+        .unwrap();
+    }
+    conn.execute("DELETE FROM settings_versions", []).unwrap();
+    conn.execute(
+        "INSERT INTO settings_versions (daily_minutes, workdays, time_windows, effective_from, created_at)
+         VALUES (?1, ?2, ?3, ?4, '')",
+        rusqlite::params![
+            s.daily_minutes,
+            serde_json::to_string(&s.workdays).unwrap(),
+            serde_json::to_string(&s.time_windows).unwrap(),
+            SENTINEL_EFFECTIVE, // 哨兵生效日与服务端共用一份常量（种子 = 自从有设置以来一直如此）
+        ],
+    )
+    .unwrap();
+}

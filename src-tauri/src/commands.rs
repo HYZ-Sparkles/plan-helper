@@ -1,6 +1,7 @@
 //! Tauri command 层：薄代理，只做 State 解包与转发（spec 接缝决策）。
 //! 业务逻辑全部在 domain，command 不做判断。
 
+use chrono::{DateTime, Local};
 use tauri::State;
 
 use crate::app_state::AppState;
@@ -9,7 +10,7 @@ use crate::domain::app_state::{app_state_view, AppStateView};
 use crate::domain::lifecycle::{CopyAsNewOutcome, LifecycleOutcome, LifecycleService};
 use crate::domain::plans::{db_err, PlanDraft, PlanError, PlanService, PlanView};
 use crate::domain::progress::{MiniBoardView, ProgressService};
-use crate::domain::settings::SettingsService;
+use crate::domain::settings::{Settings, SettingsService};
 use crate::domain::summary::{parse_date, DailySummaryStatus, DailySummaryView, SummaryService};
 
 /// 示例接缝命令：UI → command → 领域服务 → 返回。
@@ -213,6 +214,27 @@ pub fn mark_daily_summary_shown(
 ) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     SummaryService::mark_shown(&conn, state.clock.as_ref(), parse_date(&date)?)
+}
+
+/* ---- 设置（工单 13）：薄代理，生效时机与校验在 domain::settings ---- */
+
+/// 保存设置（覆盖式），返回延时字段的生效日 YYYY-MM-DD——设置页"自 X 起生效"
+/// 提示用；均分窗口与日期例外立即生效，返回值等于今天时无延时变更。
+#[tauri::command]
+pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<String, PlanError> {
+    let conn = state.db.lock().unwrap();
+    SettingsService::save(&conn, state.clock.as_ref(), &settings)
+        .map(|d| d.to_string())
+}
+
+/// 下一个工作窗口开始时刻（AutoOpenMainBoard 的"工作窗口开始时"触发排程；
+/// 桌宠窗口常驻心跳据此定时，触发时仍由 should_auto_open 权威裁决）。
+#[tauri::command]
+pub fn get_next_window_start(
+    state: State<'_, AppState>,
+) -> Result<Option<DateTime<Local>>, PlanError> {
+    let conn = state.db.lock().unwrap();
+    SettingsService::next_window_start(&conn, state.clock.as_ref())
 }
 
 /* ---- 桌宠（工单 08）：薄代理，窗口/流程接线，无领域逻辑 ---- */

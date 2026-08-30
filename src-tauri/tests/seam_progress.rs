@@ -12,7 +12,7 @@ use plan_helper_lib::domain::settings::{Settings, SettingsService, TimeWindow};
 use plan_helper_lib::infra::db;
 
 mod common;
-use common::{at, plain_task};
+use common::{at, force_settings, plain_task};
 
 
 /// 三个子目标（60/30/30 = 120 分）的任务草稿——按序勾选路径的种子
@@ -384,17 +384,15 @@ fn today_minutes_attributed_by_window_start_day() {
     let conn = db::open_in_memory().unwrap();
     let (plan_id, task_id) = seeded(&conn, plain_task("夜间任务", 120));
     let _ = plan_id;
-    // save 是 UPDATE-only：先 load 落默认行（应用启动 get_app_state 的真实前置）
-    SettingsService::load(&conn).unwrap();
-    SettingsService::save(
+    // 跨午夜窗口"自从有设置以来一直如此"（工单 13 起 save 的延时字段自下一个
+    // 工作日生效，会把 8/24 留在默认窗口——force_settings 直改存储绕开延时）
+    force_settings(
         &conn,
-        &at(2026, 8, 24, 8, 0),
         &Settings {
             time_windows: vec![TimeWindow { start_minute: 20 * 60, end_minute: 60 }],
             ..Settings::default()
         },
-    )
-    .unwrap();
+    );
 
     ProgressService::report_percent(&conn, &at(2026, 8, 24, 20, 30), task_id, 10.0).unwrap();
     ProgressService::report_percent(&conn, &at(2026, 8, 25, 0, 30), task_id, 20.0).unwrap();
@@ -408,4 +406,34 @@ fn today_minutes_attributed_by_window_start_day() {
     ProgressService::report_percent(&conn, &at(2026, 8, 25, 10, 0), task_id, 5.0).unwrap();
     let day2 = ProgressService::board(&conn, &at(2026, 8, 25, 12, 0)).unwrap().today_minutes;
     assert!((day2 - 6.0).abs() < 1e-9, "窗口外推进归属自身日期 8/25，实际 {day2}");
+}
+
+#[test]
+fn attribution_uses_window_owner_day_after_settings_change() {
+    // 测试情况（工单 13 生效时机 × 跨午夜归属）：跨午夜窗口 20:00–01:00"一直如此"；
+    //           8/24 23:30 报 12min，随后 23:45 把窗口改为 09:00–12:00（延时字段 →
+    //           8/25 生效），8/25 00:30 再报 24min。
+    // 正确结果：00:30 事件的归属看**窗口开始日（8/24）的配置**——8/24 仍有跨午夜
+    //           窗口，凌晨段归 8/24（两笔共 36min）；8/25 的"今日完成量"为 0。
+    //           归属若只看事件当日（8/25 已是新窗口）就会误归 8/25。
+    let conn = db::open_in_memory().unwrap();
+    let (plan_id, task_id) = seeded(&conn, plain_task("夜间任务", 120));
+    let _ = plan_id;
+    force_settings(
+        &conn,
+        &Settings {
+            time_windows: vec![TimeWindow { start_minute: 20 * 60, end_minute: 60 }],
+            ..Settings::default()
+        },
+    );
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 23, 30), task_id, 10.0).unwrap(); // 12min
+    let mut s = SettingsService::load(&conn).unwrap();
+    s.time_windows = vec![TimeWindow { start_minute: 540, end_minute: 720 }];
+    SettingsService::save(&conn, &at(2026, 8, 24, 23, 45), &s).unwrap(); // 周一改 → 周二生效
+    ProgressService::report_percent(&conn, &at(2026, 8, 25, 0, 30), task_id, 20.0).unwrap(); // 24min
+
+    let monday = ProgressService::board(&conn, &at(2026, 8, 24, 23, 59)).unwrap().today_minutes;
+    assert!((monday - 36.0).abs() < 1e-9, "两笔都归窗口开始日 8/24，实际 {monday}");
+    let tuesday = ProgressService::board(&conn, &at(2026, 8, 25, 0, 45)).unwrap().today_minutes;
+    assert!((tuesday - 0.0).abs() < 1e-9, "8/25 凌晨读：凌晨段归 8/24，今日为 0，实际 {tuesday}");
 }

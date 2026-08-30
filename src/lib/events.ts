@@ -8,3 +8,6 @@ export const MAIN_BOARD_REOPEN_EVENT = "main-board:reopen";
 export const MAIN_BOARD_REFRESH_EVENT = "main-board:refresh";
 /** 当日分配落定 / 生命周期变化 → 小看板重取：当前任务失效回空态、更换候选随之刷新 */
 export const MINI_BOARD_REFRESH_EVENT = "mini-board:refresh";
+/** 设置保存（工单 13）→ 桌宠重排两个定时触发（最晚窗口结束的今日总结 / 工作窗口
+ *  开始的大面板）——设置页保存后发射，PetWindow 监听重查服务端时刻 */
+export const SETTINGS_CHANGED_EVENT = "settings:changed";

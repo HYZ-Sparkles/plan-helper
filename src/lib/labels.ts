@@ -92,6 +92,10 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
       return "有子目标的任务按子目标推进与撤销，不走百分比";
     case "InvalidDate":
       return "日期格式无效（应为 YYYY-MM-DD）";
+    case "InvalidSettings": {
+      const p = err.payload as { reason?: string };
+      return p.reason ? `设置无效：${p.reason}` : "设置无效，请检查各项取值";
+    }
     case "Storage":
       return `存储异常：${err.payload}`;
     default:

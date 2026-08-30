@@ -16,7 +16,7 @@ use crate::domain::plans::{
     db_err, load_subgoals, notfound_or_db, PlanError, PlanService, PlanStatus, Priority,
     SubGoalView, TaskStatus,
 };
-use crate::domain::settings::{SettingsService, TimeWindow};
+use crate::domain::settings::{SettingsCalendar, SettingsService, TimeWindow};
 
 /// 汇报来源（ProgressLog.source 列；二态往返口径同其他枚举）。
 #[derive(Debug, Clone, Copy)]
@@ -380,8 +380,8 @@ impl ProgressService {
     /// 某个工作日的完成量（分钟）：ledger 的按日聚合（`minutes_by_day`）取"今天"一档。
     /// 日志量级是每日几十条，实时派生不建汇总表（ADR-0009）。
     fn day_minutes(conn: &Connection, clock: &dyn Clock) -> Result<f64, PlanError> {
-        let windows = SettingsService::load(conn).map_err(db_err)?.time_windows;
-        Ok(minutes_by_day(conn, &windows)?
+        let cal = SettingsService::calendar(conn).map_err(db_err)?;
+        Ok(minutes_by_day(conn, &cal)?
             .get(&clock.now().date_naive())
             .copied()
             .unwrap_or(0.0))
@@ -523,22 +523,44 @@ fn exists(
         .map_err(db_err)
 }
 
-/// 事件时刻归属的工作窗口开始日（ADR-0009 跨午夜口径）：找到包含该时刻的窗口，
-/// 跨午夜窗口的 [00:00, end) 段归前一日；不在任何窗口内 → 归属自身日期
+/// 事件时刻归属的工作窗口开始日（ADR-0009 跨午夜口径）：先按**事件所在日期**的窗口
+/// 判同段与跨午夜今晚段（t >= start 归自身），再按**前一日**的窗口判跨午夜凌晨尾巴
+/// （t < end 归前一日——窗口开始日拥有整段窗口，工单 13：窗口变更生效后历史事件的
+/// 归属由当时的窗口决定）。两处都不在窗内 → 归属自身日期
 /// （非工作日 / 窗口外的推进照常记账，CONTEXT WorkingHours）。
-/// ledger 的按日聚合（`minutes_by_day`）共用同一归属口径。
-pub(crate) fn attributed_date(at: DateTime<Local>, windows: &[TimeWindow]) -> NaiveDate {
+/// ledger 的按日聚合（`minutes_by_day`）与 11 的总结装配共用同一归属口径。
+pub(crate) fn attributed_date(
+    at: DateTime<Local>,
+    own_windows: &[TimeWindow],
+    prev_windows: &[TimeWindow],
+) -> NaiveDate {
     let t = (at.hour() * 60 + at.minute()) as u16;
-    for w in windows {
+    let own = at.date_naive();
+    for w in own_windows {
         if w.start_minute <= w.end_minute {
             if t >= w.start_minute && t < w.end_minute {
-                return at.date_naive();
+                return own;
             }
         } else if t >= w.start_minute {
-            return at.date_naive();
-        } else if t < w.end_minute {
-            return (at - Duration::days(1)).date_naive();
+            return own;
         }
     }
-    at.date_naive()
+    for w in prev_windows {
+        if w.end_minute <= w.start_minute && t < w.end_minute {
+            return own - Duration::days(1);
+        }
+    }
+    own
+}
+
+/// 事件归属日的按日解析版：own / prev 两集合的窗口取自设置按日解析器（工单 13
+/// 生效时机语义——历史事件的跨午夜归属由**窗口开始日**当时的配置决定）。
+/// ledger 的按日聚合与 11 的总结装配共用同一入口，两处不再各写归属块。
+pub(crate) fn attributed_date_on(at: DateTime<Local>, cal: &SettingsCalendar) -> NaiveDate {
+    let own = at.date_naive();
+    attributed_date(
+        at,
+        &cal.for_date(own).time_windows,
+        &cal.for_date(own - Duration::days(1)).time_windows,
+    )
 }

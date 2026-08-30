@@ -47,6 +47,25 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at         TEXT    NOT NULL DEFAULT ''-- 最近一次保存（RFC3339）
 );
 
+-- 设置版本历史（工单 13 SettingsEffectiveTime）：每日工作时间 / 每周工作日 / 时间窗口
+-- 的每次变更追加一行，effective_from = 按保存时配置的「今天之后的第一个工作日」；
+-- 某日期的配置 = effective_from <= 该日期的最新版本（均分窗口不进版本、取最新值）。
+CREATE TABLE IF NOT EXISTS settings_versions (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    daily_minutes  INTEGER NOT NULL,
+    workdays       TEXT    NOT NULL,              -- JSON [1..7]
+    time_windows   TEXT    NOT NULL,              -- JSON [{start_minute,end_minute}]
+    effective_from TEXT    NOT NULL,              -- YYYY-MM-DD：自哪个日期起生效
+    created_at     TEXT    NOT NULL               -- RFC3339（保存时刻）
+);
+
+-- 日期例外（工单 13 DateOverride，双向覆盖周循环）：按日期立即生效，
+-- 不进版本历史——例外天然锚定具体日期，提前标注、将来生效（story 46/48）。
+CREATE TABLE IF NOT EXISTS date_overrides (
+    date    TEXT    PRIMARY KEY,                   -- YYYY-MM-DD
+    working INTEGER NOT NULL                       -- 0 = 这天不工作 / 1 = 这天工作
+);
+
 CREATE TABLE IF NOT EXISTS plans (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     name         TEXT NOT NULL,

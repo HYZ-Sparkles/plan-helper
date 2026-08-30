@@ -216,6 +216,8 @@ pub enum PlanError {
     NotPercentTask,
     /// 日期参数非法（须 YYYY-MM-DD；工单 11 总结的 command 边界解析）
     InvalidDate,
+    /// 设置非法（工单 13：窗口起止相同 / 均分窗口或每日工作时间 < 1；reason 供文案）
+    InvalidSettings { reason: String },
     /// 已完成任务字段锁定，提交内容与库中不一致
     TaskLocked { index: usize },
     /// 提交任务集与库中现存任务不一致（缺失或未知 id）——删除必须显式走 delete_task

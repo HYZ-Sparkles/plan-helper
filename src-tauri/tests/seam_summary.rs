@@ -10,25 +10,25 @@ use plan_helper_lib::domain::plans::{
     PauseReason, PlanDraft, PlanService, PlanStatus, Priority, SubGoalDraft, TaskDraft,
 };
 use plan_helper_lib::domain::progress::ProgressService;
-use plan_helper_lib::domain::settings::{SettingsService, TimeWindow};
+use plan_helper_lib::domain::settings::{DateOverride, SettingsService, TimeWindow};
 use plan_helper_lib::domain::summary::{parse_date, SummaryService};
 use plan_helper_lib::infra::db;
 
 mod common;
-use common::{at, force_pause_reason, force_plan_status, plain_task};
+use common::{at, d, force_pause_reason, force_plan_status, force_settings, plain_task};
 
 const MON: &str = "2026-08-24"; // 周一
 const TUE: &str = "2026-08-25";
 
-/// 种子时间窗口（工单 13 就绪前的验收路径：直接 save 设置）。
-/// 注意 `SettingsService::save` 是 UPDATE-only——先 load 落默认行再改。
+/// 种子时间窗口：配置"自从有设置以来一直如此"（工单 13 起 `save` 的延时字段
+/// 自下一个工作日生效，验收种子必须绕开延时——force_settings 直改存储）。
 fn seed_windows(conn: &rusqlite::Connection, windows: &[(u16, u16)]) {
     let mut s = SettingsService::load(conn).unwrap();
     s.time_windows = windows
         .iter()
         .map(|&(a, b)| TimeWindow { start_minute: a, end_minute: b })
         .collect();
-    SettingsService::save(conn, &at(2026, 8, 24, 8, 0), &s).unwrap();
+    force_settings(conn, &s);
 }
 
 /// 计划草稿（名称 + 优先级 + 任务集）
@@ -326,4 +326,69 @@ fn parse_date_rejects_garbage() {
     assert!(parse_date("2026-08-24").is_ok());
     assert!(parse_date("08/24/2026").is_err());
     assert!(parse_date("").is_err());
+}
+
+#[test]
+fn settings_shift_tomorrow_trigger_not_today() {
+    // 测试情况（工单 13 生效时机 × 总结触发）：周一 10:00 把窗口从 09:00–18:00
+    //           改为 09:00–12:00（延时字段 → 周二生效）。
+    // 正确结果：周一 next_fire 仍是 18:00（当日按生效中的旧配置——改动不影响
+    //           当日总结）；周一 13:00 未到触发点、18:00 整 due=周一；周二起按
+    //           新配置 next_fire=12:00。
+    let conn = db::open_in_memory().unwrap();
+    seed_windows(&conn, &[(540, 1080)]); // 09:00–18:00，"一直如此"
+    let mut s = SettingsService::load(&conn).unwrap();
+    s.time_windows = vec![TimeWindow { start_minute: 540, end_minute: 720 }];
+    SettingsService::save(&conn, &at(2026, 8, 24, 10, 0), &s).unwrap(); // 周一改 → 周一生效
+
+    let fmt = |t: Option<chrono::DateTime<chrono::Local>>| {
+        t.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+    };
+    assert_eq!(
+        fmt(SummaryService::next_fire(&conn, &at(2026, 8, 24, 10, 0)).unwrap()),
+        Some("2026-08-24 18:00:00".into()),
+        "当日触发点按旧配置"
+    );
+    assert_eq!(SummaryService::due(&conn, &at(2026, 8, 24, 13, 0)).unwrap(), None, "周一 13:00 未到旧触发点");
+    assert_eq!(SummaryService::due(&conn, &at(2026, 8, 24, 18, 0)).unwrap().map(|d| d.to_string()), Some(MON.to_string()), "周一 18:00 整该弹");
+    assert_eq!(
+        fmt(SummaryService::next_fire(&conn, &at(2026, 8, 25, 10, 0)).unwrap()),
+        Some("2026-08-25 12:00:00".into()),
+        "周二起按新配置触发"
+    );
+}
+
+#[test]
+fn date_overrides_shift_summary_triggers() {
+    // 测试情况（工单 13 日期例外 × 总结触发）：周一 8/24 被例外标休、周六 8/29
+    //           被例外标工（其余维持默认周一至五 + 09:00–18:00）。
+    // 正确结果：周一 19:00 无触发点（休日不弹）；next_fire 周一 10:00 落周二
+    //           18:00；周五 10:00 落补班周六 18:00；周六 18:30 该弹周六总结。
+    let conn = db::open_in_memory().unwrap();
+    let mut s = SettingsService::load(&conn).unwrap();
+    s.date_overrides = vec![
+        DateOverride { date: d(2026, 8, 24), working: false },
+        DateOverride { date: d(2026, 8, 29), working: true },
+    ];
+    force_settings(&conn, &s);
+
+    assert_eq!(SummaryService::due(&conn, &at(2026, 8, 24, 19, 0)).unwrap(), None, "休日无触发点");
+    let fmt = |t: Option<chrono::DateTime<chrono::Local>>| {
+        t.map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+    };
+    assert_eq!(
+        fmt(SummaryService::next_fire(&conn, &at(2026, 8, 24, 10, 0)).unwrap()),
+        Some("2026-08-25 18:00:00".into()),
+        "周一标休 → 触发落周二"
+    );
+    assert_eq!(
+        fmt(SummaryService::next_fire(&conn, &at(2026, 8, 28, 18, 30)).unwrap()),
+        Some("2026-08-29 18:00:00".into()),
+        "周五触发过后 → 补班周六也有触发点"
+    );
+    assert_eq!(
+        SummaryService::due(&conn, &at(2026, 8, 29, 18, 30)).unwrap().map(|d| d.to_string()),
+        Some("2026-08-29".into()),
+        "补班周六 18:30 该弹"
+    );
 }

@@ -65,6 +65,8 @@ pub fn run() {
             commands::correct_total_progress,
             commands::should_auto_open_main_board,
             commands::is_work_time,
+            commands::save_settings,
+            commands::get_next_window_start,
             commands::get_daily_summary,
             commands::get_daily_summary_status,
             commands::mark_daily_summary_shown,

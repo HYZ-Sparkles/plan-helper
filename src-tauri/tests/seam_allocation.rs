@@ -6,10 +6,11 @@ use plan_helper_lib::domain::lifecycle::LifecycleService;
 use plan_helper_lib::domain::plans::{
     PlanDraft, PlanError, PlanService, Priority, SubGoalDraft, TaskStatus,
 };
+use plan_helper_lib::domain::settings::{DateOverride, Settings};
 use plan_helper_lib::infra::db;
 
 mod common;
-use common::{at, force_task_status, plain_task};
+use common::{at, d, force_settings, force_task_status, plain_task};
 
 /// 三任务计划草稿：A（60 分）、B 依赖 A（30 分）、SG 带两个子目标（60+30 分）
 fn sample(name: &str) -> PlanDraft {
@@ -264,5 +265,29 @@ fn allocation_expires_next_day() {
     assert_eq!(next.selected_task_ids, Vec::<i64>::new());
     assert!(
         AllocationService::should_auto_open(&conn, &at(2026, 8, 25, 8, 0), true, false).unwrap()
+    );
+}
+
+#[test]
+fn should_auto_open_respects_date_override() {
+    // 测试情况（工单 13 日期例外 × 自动打开判定）：周二 8/25（工作日）被例外标为
+    //           休息（标明天——例外只能标注将来，story 46/48）。
+    // 正确结果：自动触发（窗口开始/启动检测）在例外休日不弹（manual=false）；
+    //           手动切入工作模式 = 主动加班照样弹（manual=true，2026-08-29 决策）。
+    let conn = db::open_in_memory().unwrap();
+    force_settings(
+        &conn,
+        &Settings {
+            date_overrides: vec![DateOverride { date: d(2026, 8, 25), working: false }],
+            ..Settings::default()
+        },
+    );
+    assert!(
+        !AllocationService::should_auto_open(&conn, &at(2026, 8, 25, 9, 0), true, false).unwrap(),
+        "例外休日：自动触发不弹"
+    );
+    assert!(
+        AllocationService::should_auto_open(&conn, &at(2026, 8, 25, 9, 0), true, true).unwrap(),
+        "例外休日：手动切工作模式（主动加班）照样弹"
     );
 }

@@ -22,8 +22,8 @@ use crate::domain::ledger::LedgerService;
 use crate::domain::plans::{
     db_err, PlanError, PlanService, PlanStatus, PauseReason, Priority, SubGoalView,
 };
-use crate::domain::progress::{attributed_date, round_delta_minutes, round_to_one_decimal};
-use crate::domain::settings::{Settings, SettingsService};
+use crate::domain::progress::{attributed_date_on, round_delta_minutes, round_to_one_decimal};
+use crate::domain::settings::{midnight_of, DAY_HORIZON, Settings, SettingsService};
 
 /// 净推进有效阈值（分钟）：低于它视为当日零推进（不展示）。写入端已 round 到 1e-9 网格，
 /// 求和残留至多 1e-6 量级；合法最小推进（0.1% × 任意耗时）远高于它。
@@ -99,12 +99,13 @@ impl SummaryService {
     /// DailySummaryTrigger 判定：现在是否到了"该弹而未弹"的总结时刻。
     /// 只看今天与昨天：今天的最晚窗口结束已过而未登记 → 补弹"今日总结"（当天没开着
     /// 应用的场景）；否则昨天已过而未登记 → 补登"昨日总结"（次日首开）。
+    /// 逐日按该日期的生效配置取窗口（工单 13：设置变更不追溯改写当日/历史触发点）。
     pub fn due(conn: &Connection, clock: &dyn Clock) -> Result<Option<NaiveDate>, PlanError> {
-        let settings = SettingsService::load(conn).map_err(db_err)?;
+        let cal = SettingsService::calendar(conn).map_err(db_err)?;
         let now = clock.now();
         for offset in [0, 1] {
             let day = now.date_naive() - Duration::days(offset);
-            if let Some(fire) = latest_window_end(&settings, day) {
+            if let Some(fire) = latest_window_end(&cal.for_date(day), day) {
                 if fire <= now && !Self::is_shown(conn, day)? {
                     return Ok(Some(day));
                 }
@@ -114,16 +115,16 @@ impl SummaryService {
     }
 
     /// 下一次自动触发的时刻：从今天向前找第一个"最晚窗口结束 > 现在"的工作日。
-    /// 前端定时器据此排程（触发后重查重排，设置改动（工单 13）后重开即换挡）。
+    /// 前端定时器据此排程（触发后重查重排，设置保存后经 settings:changed 事件重排）。
     pub fn next_fire(
         conn: &Connection,
         clock: &dyn Clock,
     ) -> Result<Option<DateTime<Local>>, PlanError> {
-        let settings = SettingsService::load(conn).map_err(db_err)?;
+        let cal = SettingsService::calendar(conn).map_err(db_err)?;
         let now = clock.now();
         let mut day = now.date_naive();
-        for _ in 0..366 {
-            if let Some(fire) = latest_window_end(&settings, day) {
+        for _ in 0..DAY_HORIZON {
+            if let Some(fire) = latest_window_end(&cal.for_date(day), day) {
                 if fire > now {
                     return Ok(Some(fire));
                 }
@@ -164,8 +165,7 @@ impl SummaryService {
         clock: &dyn Clock,
         date: NaiveDate,
     ) -> Result<DailySummaryView, PlanError> {
-        let settings = SettingsService::load(conn).map_err(db_err)?;
-        let windows = settings.time_windows.clone();
+        let cal = SettingsService::calendar(conn).map_err(db_err)?;
         // 当日净推进按任务聚合（JOIN 不过滤 deleted_at：已删任务的推进仍是真实工时，
         // 计入计划与总量，只是渲染不出任务行——归档不是抹账）
         let mut by_task: HashMap<i64, f64> = HashMap::new();
@@ -192,7 +192,7 @@ impl SummaryService {
             let Ok(at) = DateTime::parse_from_rfc3339(&at) else {
                 continue;
             };
-            if attributed_date(at.with_timezone(&Local), &windows) != date {
+            if attributed_date_on(at.with_timezone(&Local), &cal) != date {
                 continue;
             }
             *by_task.entry(task_id).or_default() += delta;
@@ -245,7 +245,8 @@ impl SummaryService {
             date: date.to_string(),
             is_today: date == today,
             is_yesterday: date == today - Duration::days(1),
-            workday: settings.is_workday_on(date),
+            // 归属日按其生效配置解析（周循环 + 日期例外；工单 13）
+            workday: cal.for_date(date).is_workday_on(date),
             total_minutes: total,
             target_minutes: target.target_minutes,
             base_minutes: target.base_minutes,
@@ -275,15 +276,13 @@ pub fn parse_date(s: &str) -> Result<NaiveDate, PlanError> {
 
 /// 工作日 D 的触发时刻：当日**最晚**工作窗口的结束时刻（多段窗口取 max）。跨午夜窗口
 /// （end < start，如 20:00–01:00）的结束落在**次日**，偏移 = 1440 + end 分钟；非工作日或
-/// 未配置窗口 → None（无触发点，永不自动弹出）。
+/// 未配置窗口 → None（无触发点，永不自动弹出）。settings 为该日期的生效配置（调用方
+/// 按日解析后传入，工单 13）。
 fn latest_window_end(settings: &Settings, date: NaiveDate) -> Option<DateTime<Local>> {
     if !settings.is_workday_on(date) || settings.time_windows.is_empty() {
         return None;
     }
-    let midnight = date
-        .and_hms_opt(0, 0, 0)?
-        .and_local_timezone(Local)
-        .unwrap();
+    let midnight = midnight_of(date);
     settings
         .time_windows
         .iter()

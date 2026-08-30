@@ -22,6 +22,9 @@
  *   工作模式有当前任务才恢复（恢复时以桌宠为锚刚性就位，不重叠）
  * - 今日总结触发（11，DailySummaryTrigger）：常驻心跳负责定时——启动查补登（当天没开
  *   应用 → 次日首开弹"昨日总结"）、定时到最晚工作窗口结束自动弹（只弹一次，服务端登记）
+ * - 工作窗口开始触发（13，AutoOpenMainBoard）：心跳定时到下一个工作窗口开始，届时
+ *   处于工作模式且今日未分配才弹大面板（处于休息模式不打扰，模式切换本身是另一触发）；
+ *   设置保存（settings:changed）后两个定时触发都重排
  */
 import { onMounted, reactive, ref } from "vue";
 import { emitTo, listen } from "@tauri-apps/api/event";
@@ -36,8 +39,8 @@ import { afterDragSteps, pickRandomKind, RANDOM_INTERVAL_MS, randomSteps, type P
 import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
-import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_REFRESH_EVENT } from "../lib/events";
-import { exitApp, getDailySummaryStatus, getMiniBoard, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
+import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_REFRESH_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
+import { exitApp, getDailySummaryStatus, getMiniBoard, getNextWindowStart, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
 /** 启动序列落地（7 Stand Idle 开始）后站立的展示节拍，再转入工作睡眠 */
 const STARTUP_STAND_BEAT_MS = 700;
@@ -93,6 +96,8 @@ onMounted(async () => {
   // 今日总结触发接线（工单 11，DailySummaryTrigger）：桌宠窗口是常驻心跳，
   // 定时排程放这里（启动补登检查 + 最晚窗口结束的定时触发，与动画序列无关）
   void armDailySummary();
+  // 工作窗口开始触发接线（工单 13，AutoOpenMainBoard）：同一心跳排下一个窗口开始
+  void armWindowStart();
 
   // 系统关闭请求拦截：桌宠无关闭按钮，退出只能走「再见」/托盘（工单 14）
   await win.onCloseRequested((e) => e.preventDefault());
@@ -114,6 +119,11 @@ onMounted(async () => {
     } else {
       void attachBoardRigidly();
     }
+  });
+  // 设置保存（13）：生效时刻由服务端按版本历史裁决，两个定时触发都重查重排
+  await listen(SETTINGS_CHANGED_EVENT, () => {
+    void armDailySummary();
+    void armWindowStart();
   });
 });
 
@@ -331,6 +341,33 @@ function scheduleSummaryFire(gen: number, nextFireAt: string | null) {
 /** 弹出某日总结（自动触发路径）：打开即登记已弹（只弹一次）；失败静默——下次启动补登自愈 */
 function openDailySummary(date: string) {
   openDailySummaryWindow(date, true).catch(() => { /* 窗口/登记失败：控制面板"今日总结"入口兜底 */ });
+}
+
+/* ---- 工作窗口开始触发（工单 13，AutoOpenMainBoard）：定时到下一个窗口开始 ---- */
+
+/** 触发排程代号：重排时自增，旧定时器自弃（与总结触发同构） */
+let windowStartGen = 0;
+
+/** 启动与每次触发/设置保存后各排一次：定时到下一个工作窗口开始（服务端给的时刻为准） */
+async function armWindowStart() {
+  const gen = ++windowStartGen;
+  try {
+    const next = await getNextWindowStart();
+    if (gen !== windowStartGen) return; // 已被更新的排程取代
+    if (!next) return; // 未配置窗口：永不自动触发
+    window.setTimeout(
+      () => {
+        if (gen !== windowStartGen) return;
+        // 触发时仍由服务端权威裁决（工作模式 + 今日未分配）；处于休息模式不打扰——
+        // 用户手动切回工作模式本身是另一条触发（manual，主动加班）
+        void checkAutoOpen(false);
+        void armWindowStart(); // 排再下一个窗口开始
+      },
+      Math.min(Math.max(new Date(next).getTime() - Date.now(), 0), 2 ** 31 - 1),
+    );
+  } catch {
+    /* 后端不可达：下次设置保存/重启自愈 */
+  }
 }
 
 /* ---- 点击 / 拖拽（09 完整形态：PetDragBounds 四约束 + 刚性看板组合 + 冻结帧） ---- */

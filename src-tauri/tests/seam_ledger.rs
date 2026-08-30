@@ -9,10 +9,11 @@ use plan_helper_lib::domain::ledger::LedgerService;
 use plan_helper_lib::domain::lifecycle::LifecycleService;
 use plan_helper_lib::domain::plans::{PlanDraft, PlanService, Priority, SubGoalDraft};
 use plan_helper_lib::domain::progress::ProgressService;
+use plan_helper_lib::domain::settings::{DateOverride, Settings};
 use plan_helper_lib::infra::db;
 
 mod common;
-use common::{at, plain_task};
+use common::{at, d, force_settings, plain_task};
 
 /// 建进行中计划 + 一个 6000 分钟无子目标任务（百分比 ×60 = 分钟：5% = 300min = 5h，
 /// 任意日完成量都能用一位小数百分比精确构造），返回任务 id。
@@ -278,4 +279,54 @@ fn selection_level_surplus_not_credited() {
     ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), t1, 50.0).unwrap(); // 实推 180
     ProgressService::report_percent(&conn, &at(2026, 8, 24, 11, 0), t2, 25.0).unwrap(); // 实推 120
     assert_target(&conn, 2026, 8, 25, 300.0, "实推 5h 恰达标，选择层面的 14h 不抵扣");
+}
+
+#[test]
+fn override_holiday_progress_counts_as_overtime() {
+    // 测试情况（工单 13 日期例外 × 工单 10 结算回归）：周二 8/25 被例外标为休息
+    //           （原工作日）；周一推 198min（3.3%×6000，带外欠 102）、周二休日推
+    //           600min（10%×6000）。
+    // 正确结果：周一欠 102 均分到后续 7 个**工作日**（周二被例外剔除，顺延到
+    //           周三起）；周二的推进按超额全额入账（-600 抵扣）；周三目标 =
+    //           300 + (102-600)/7 ≈ 228.857——休日干活换来了之后的轻松日。
+    let conn = db::open_in_memory().unwrap();
+    let task = seeded(&conn);
+    force_settings(
+        &conn,
+        &Settings {
+            date_overrides: vec![DateOverride { date: d(2026, 8, 25), working: false }],
+            ..Settings::default()
+        },
+    );
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 10, 0), task, 3.3).unwrap();
+    ProgressService::report_percent(&conn, &at(2026, 8, 25, 11, 0), task, 10.0).unwrap();
+    assert_target(&conn, 2026, 8, 25, 300.0, "休日无目标义务（基准展示，UI 隐藏目标）");
+    assert_target(&conn, 2026, 8, 26, 300.0 + (102.0 - 600.0) / 7.0, "周二推进按超额入账且不占工作日窗口位");
+}
+
+#[test]
+fn override_workday_adds_target_and_window_slot() {
+    // 测试情况（工单 13 日期例外 × 工单 10 结算回归）：周六 8/29 被例外标为工作
+    //           （调休补班）；周六推 102min（1.7%×6000）。
+    // 正确结果：周六自身有目标义务（基准 300、无结转）；差额 198 均分到后续
+    //           工作日 → 周一目标 ≈ 328.57；对照无例外时周六是休日、102 全额按
+    //           超额抵扣 → 周一目标 ≈ 285.43。
+    let with_work = db::open_in_memory().unwrap();
+    let task = seeded(&with_work);
+    force_settings(
+        &with_work,
+        &Settings {
+            date_overrides: vec![DateOverride { date: d(2026, 8, 29), working: true }],
+            ..Settings::default()
+        },
+    );
+    ProgressService::report_percent(&with_work, &at(2026, 8, 29, 10, 0), task, 1.7).unwrap();
+    assert_target(&with_work, 2026, 8, 29, 300.0, "补班周六自身有目标义务（无结转）");
+    assert_target(&with_work, 2026, 8, 31, 300.0 + 198.0 / 7.0, "补班日计入均分窗口（周日跳过）");
+
+    let without_work = db::open_in_memory().unwrap();
+    let task2 = seeded(&without_work);
+    force_settings(&without_work, &Settings::default());
+    ProgressService::report_percent(&without_work, &at(2026, 8, 29, 10, 0), task2, 1.7).unwrap();
+    assert_target(&without_work, 2026, 8, 31, 300.0 - 102.0 / 7.0, "对照：休日推进按超额抵扣后续目标");
 }
