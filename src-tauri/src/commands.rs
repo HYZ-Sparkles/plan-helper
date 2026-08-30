@@ -10,6 +10,7 @@ use crate::domain::lifecycle::LifecycleService;
 use crate::domain::plans::{db_err, PlanDraft, PlanError, PlanService, PlanView};
 use crate::domain::progress::{MiniBoardView, ProgressService};
 use crate::domain::settings::SettingsService;
+use crate::domain::summary::{parse_date, DailySummaryStatus, DailySummaryView, SummaryService};
 
 /// 示例接缝命令：UI → command → 领域服务 → 返回。
 #[tauri::command]
@@ -178,6 +179,37 @@ pub fn correct_total_progress(
 ) -> Result<(), PlanError> {
     let conn = state.db.lock().unwrap();
     ProgressService::correct_total(&conn, state.clock.as_ref(), task_id, percent).map(|_| ())
+}
+
+/* ---- 今日总结（工单 11）：薄代理，触发判定与装配在 domain::summary ---- */
+
+/// 指定日期的总结视图（从 ProgressLog 实时装配——弹出后调出、次日补登都读最新账）。
+#[tauri::command]
+pub fn get_daily_summary(
+    state: State<'_, AppState>,
+    date: String,
+) -> Result<DailySummaryView, PlanError> {
+    let conn = state.db.lock().unwrap();
+    SummaryService::summary(&conn, state.clock.as_ref(), parse_date(&date)?)
+}
+
+/// 触发状态：待弹日期 + 最近已弹日期 + 下次触发时刻（启动补登检查 / 前端定时器 / 控制面板入口共用）。
+#[tauri::command]
+pub fn get_daily_summary_status(
+    state: State<'_, AppState>,
+) -> Result<DailySummaryStatus, PlanError> {
+    let conn = state.db.lock().unwrap();
+    SummaryService::status(&conn, state.clock.as_ref())
+}
+
+/// 登记某日总结已弹出（只弹一次；自动弹出与控制面板补看两条路都走这里，幂等）。
+#[tauri::command]
+pub fn mark_daily_summary_shown(
+    state: State<'_, AppState>,
+    date: String,
+) -> Result<(), PlanError> {
+    let conn = state.db.lock().unwrap();
+    SummaryService::mark_shown(&conn, state.clock.as_ref(), parse_date(&date)?)
 }
 
 /* ---- 桌宠（工单 08）：薄代理，窗口/流程接线，无领域逻辑 ---- */

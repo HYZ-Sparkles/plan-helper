@@ -211,6 +211,8 @@ pub enum PlanError {
     PercentOverflow,
     /// 百分比汇报 / 修正只适用于无子目标任务（有子目标走按序勾选与撤销）
     NotPercentTask,
+    /// 日期参数非法（须 YYYY-MM-DD；工单 11 总结的 command 边界解析）
+    InvalidDate,
     /// 已完成任务字段锁定，提交内容与库中不一致
     TaskLocked { index: usize },
     /// 提交任务集与库中现存任务不一致（缺失或未知 id）——删除必须显式走 delete_task

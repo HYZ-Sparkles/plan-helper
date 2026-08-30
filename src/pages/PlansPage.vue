@@ -8,6 +8,11 @@
   <section class="plans-col">
     <div class="title-row">
       <h2 class="page-title">计划管理</h2>
+      <!-- 今日总结（工单 11，story 58）：随时调出看最新版（内容从日志实时重算）；
+           优先补看待弹的，其次最近一次已弹的，从没弹过则看今天 -->
+      <button type="button" class="ghost-btn" @click="openSummary">
+        <PhChartBar :size="16" /> 今日总结
+      </button>
       <!-- 打开大面板：重开今日分配（覆盖重选；已推进的进度从日志来不受影响） -->
       <button type="button" class="ghost-btn" @click="openMainBoard">
         <PhCalendarCheck :size="16" /> 打开大面板
@@ -66,11 +71,18 @@
 import { computed, onMounted, ref } from "vue";
 import { emitTo } from "@tauri-apps/api/event";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { PhCalendarCheck } from "@phosphor-icons/vue";
+import { PhCalendarCheck, PhChartBar } from "@phosphor-icons/vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
-import { listPlans, type PlanStatus, type PlanView } from "../lib/api";
+import {
+  getDailySummaryStatus,
+  listPlans,
+  type PlanStatus,
+  type PlanView,
+} from "../lib/api";
 import { hoursFromMinutes, statusLabel } from "../lib/labels";
+import { localToday } from "../lib/validation";
+import { openDailySummaryWindow } from "../lib/summary";
 
 /** 筛选项：key + 文案 + 命中状态集（「全部」不过滤）；五个状态都是一等公民 */
 const filters: { key: string; label: string; statuses: PlanStatus[] | null }[] = [
@@ -119,6 +131,14 @@ async function openMainBoard() {
   await emitTo("main-board", "main-board:reopen");
   await board.show();
   await board.setFocus();
+}
+
+/** 打开今日总结：日期 = 待弹的 > 最近已弹的 > 今天本地日期；
+ *  补看的就是"待弹"那份时登记已弹（自动触发不再重弹），看历史/今天则不登记 */
+async function openSummary() {
+  const st = await getDailySummaryStatus();
+  const date = st.due ?? st.last_shown ?? localToday();
+  await openDailySummaryWindow(date, date === st.due);
 }
 </script>
 

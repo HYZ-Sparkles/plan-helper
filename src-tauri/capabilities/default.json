@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "全部四个窗口共用的基础能力（窗口显隐 / 拖拽 / 定位）",
-  "windows": ["pet", "pet-menu", "mini-board", "main-board", "control-panel"],
+  "windows": ["pet", "pet-menu", "mini-board", "main-board", "daily-summary", "control-panel"],
   "permissions": [
     "core:default",
     "opener:default",

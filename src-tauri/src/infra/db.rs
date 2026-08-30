@@ -107,4 +107,9 @@ CREATE TABLE IF NOT EXISTS current_task (
     id      INTEGER PRIMARY KEY CHECK (id = 1), -- 单行：用户指定的「此刻正在做」（工单 07）
     task_id INTEGER NOT NULL REFERENCES tasks(id)
 );
+
+CREATE TABLE IF NOT EXISTS summary_shown (
+    date     TEXT PRIMARY KEY,            -- 总结归属日 YYYY-MM-DD（只弹一次的登记，工单 11）
+    shown_at TEXT NOT NULL                -- 弹出时刻（RFC3339）
+);
 ";

@@ -476,8 +476,9 @@ pub(crate) fn round_delta_minutes(v: f64) -> f64 {
 /// 派生百分比边界 round：四舍五入到一位小数（与 CONTEXT ProgressGranularity 0.1% 颗粒度对齐），
 /// 消 IEEE 754 浮点尾巴暴露到 UI（如 “43.0999999...”）；领域 `TaskProgress::percent()`
 /// 仍保持原始精度供“分子不变分母变”语义使用，本函数仅作用于跨边界输出。
-/// 复用点：CurrentTaskView.percent 装配；测试 seam_progress::progress_percent_rounds_to_one_decimal。
-fn round_to_one_decimal(v: f64) -> f64 {
+/// 复用点：CurrentTaskView.percent 装配、summary 视图的 SummaryTask.percent（工单 11）；
+/// 测试 seam_progress::progress_percent_rounds_to_one_decimal。
+pub(crate) fn round_to_one_decimal(v: f64) -> f64 {
     (v * 10.0).round() / 10.0
 }
 

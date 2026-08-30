@@ -59,6 +59,14 @@
         "visible": false
       },
       {
+        "label": "daily-summary",
+        "title": "今日总结",
+        "width": 620,
+        "height": 680,
+        "center": true,
+        "visible": false
+      },
+      {
         "label": "control-panel",
         "title": "控制面板",
         "width": 1080,

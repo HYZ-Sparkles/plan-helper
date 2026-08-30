@@ -19,6 +19,14 @@ export function normalizeDateString(s: string): string | null {
   return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
+/** 本地日期 → YYYY-MM-DD（生成"今天"的兜底日期用，与服务端日期口径一致）。
+ *  工单 11 的"调出今日总结"入口在从没弹过任何总结时取它。 */
+export function localToday(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 /**
  * 百分比数值校验（CONTEXT ProgressGranularity，2026-08-24 验收修订）：
  * 任意正数、上限 100、最多一位小数；min 控制下限（汇报 0.1 / 修正 0）。

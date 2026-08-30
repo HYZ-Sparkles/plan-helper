@@ -87,6 +87,8 @@ export function planErrorMessage(err: { kind?: string; payload?: unknown }): str
       return "累计汇报会超过 100%，请调小本次增量";
     case "NotPercentTask":
       return "有子目标的任务按子目标推进与撤销，不走百分比";
+    case "InvalidDate":
+      return "日期格式无效（应为 YYYY-MM-DD）";
     case "Storage":
       return `存储异常：${err.payload}`;
     default:

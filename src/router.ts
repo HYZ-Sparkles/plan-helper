@@ -4,6 +4,7 @@
  */
 import { createRouter, createWebHashHistory } from "vue-router";
 import ControlPanelWindow from "./windows/ControlPanelWindow.vue";
+import DailySummaryWindow from "./windows/DailySummaryWindow.vue";
 import MainBoardWindow from "./windows/MainBoardWindow.vue";
 import MiniBoardWindow from "./windows/MiniBoardWindow.vue";
 import PetWindow from "./windows/PetWindow.vue";
@@ -22,6 +23,7 @@ export const router = createRouter({
     { path: "/pet-menu", component: PetMenuWindow },
     { path: "/mini-board", component: MiniBoardWindow },
     { path: "/main-board", component: MainBoardWindow },
+    { path: "/daily-summary", component: DailySummaryWindow },
     {
       path: "/control-panel",
       component: ControlPanelWindow,
@@ -44,6 +46,7 @@ const routeByLabel: Record<string, string> = {
   "pet-menu": "/pet-menu",
   "mini-board": "/mini-board",
   "main-board": "/main-board",
+  "daily-summary": "/daily-summary",
   "control-panel": "/control-panel/plans",
 };
 

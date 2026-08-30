@@ -65,6 +65,9 @@ pub fn run() {
             commands::correct_total_progress,
             commands::should_auto_open_main_board,
             commands::is_work_time,
+            commands::get_daily_summary,
+            commands::get_daily_summary_status,
+            commands::mark_daily_summary_shown,
             commands::exit_app
         ])
         .run(tauri::generate_context!())

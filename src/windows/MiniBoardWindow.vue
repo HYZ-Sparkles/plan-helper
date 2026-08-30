@@ -221,7 +221,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref, watch } from "vue";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import {
   PhArrowsLeftRight,
@@ -244,6 +244,7 @@ import {
 } from "../lib/api";
 import { hoursFromMinutes, hoursLabel, carryLabel, planErrorMessage } from "../lib/labels";
 import { isValidPercentValue } from "../lib/validation";
+import { SUMMARY_REFRESH_EVENT } from "../lib/summary";
 
 const win = getCurrentWebviewWindow();
 const view = ref<MiniBoardView | null>(null);
@@ -318,7 +319,8 @@ async function load() {
   }
 }
 
-/** 统一动作通道：busy 互斥 + 失败 toast，成功后重载（视图从日志派生，读到即最新） */
+/** 统一动作通道：busy 互斥 + 失败 toast，成功后重载（视图从日志派生，读到即最新）。
+ *  同时唤醒今日总结（若正开着，重取最新账——内容实时重算，工单 11）。 */
 async function act(action: () => Promise<void>, note?: string) {
   if (busy.value) return;
   busy.value = true;
@@ -326,6 +328,7 @@ async function act(action: () => Promise<void>, note?: string) {
     await action();
     if (note) flash(note);
     await load();
+    void emitTo("daily-summary", SUMMARY_REFRESH_EVENT);
   } catch (err) {
     flash(planErrorMessage(err as { kind?: string }));
   } finally {

@@ -20,6 +20,8 @@
  *   动作独立）；休息模式拖后非站立先 3 Sit to Stand 再 15 Attack（用户动作占锁）
  * - 小看板显隐跟着模式走：休息模式隐藏（含大面板确认后也不亮，67 休息即不工作），
  *   工作模式有当前任务才恢复（恢复时以桌宠为锚刚性就位，不重叠）
+ * - 今日总结触发（11，DailySummaryTrigger）：常驻心跳负责定时——启动查补登（当天没开
+ *   应用 → 次日首开弹"昨日总结"）、定时到最晚工作窗口结束自动弹（只弹一次，服务端登记）
  */
 import { onMounted, reactive, ref } from "vue";
 import { emitTo, listen } from "@tauri-apps/api/event";
@@ -32,7 +34,8 @@ import { createTauriMover } from "../lib/pet/tauriMover";
 import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dragBounds";
 import { afterDragSteps, pickRandomKind, RANDOM_INTERVAL_MS, randomSteps, type Pose } from "../lib/pet/actions";
 import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
-import { exitApp, getMiniBoard, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
+import { openDailySummaryWindow } from "../lib/summary";
+import { exitApp, getDailySummaryStatus, getMiniBoard, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
 /** 启动序列落地（7 Stand Idle 开始）后站立的展示节拍，再转入工作睡眠 */
 const STARTUP_STAND_BEAT_MS = 700;
@@ -85,6 +88,9 @@ onMounted(async () => {
   }
   engine.setMover((mover = await createTauriMover()));
   void syncBoardAtStartup();
+  // 今日总结触发接线（工单 11，DailySummaryTrigger）：桌宠窗口是常驻心跳，
+  // 定时排程放这里（启动补登检查 + 最晚窗口结束的定时触发，与动画序列无关）
+  void armDailySummary();
 
   // 系统关闭请求拦截：桌宠无关闭按钮，退出只能走「再见」/托盘（工单 14）
   await win.onCloseRequested((e) => e.preventDefault());
@@ -293,6 +299,43 @@ function goodbye() {
   if (!ok) return;
   phase.value = "goodbye";
   randomGen++;
+}
+
+/* ---- 今日总结触发（工单 11，DailySummaryTrigger）：最晚窗口结束自动弹 / 次日首开补登 ---- */
+
+/** 触发排程代号：重排时自增，旧定时器自弃（与随机动作调度同构） */
+let summaryGen = 0;
+
+/** 启动与每次触发后各排一次：有待弹总结立即弹（补登/补弹），否则定时到下次窗口结束 */
+async function armDailySummary() {
+  const gen = ++summaryGen;
+  try {
+    const st = await getDailySummaryStatus();
+    if (gen !== summaryGen) return; // 已被更新的排程取代
+    if (st.due) void openDailySummary(st.due);
+    scheduleSummaryFire(gen, st.next_fire_at);
+  } catch {
+    /* 后端不可达：控制面板"今日总结"入口兜底 */
+  }
+}
+
+/** 定时到下一次最晚窗口结束（服务端给的时刻为准）；触发时重查状态（权威裁决）再重排 */
+function scheduleSummaryFire(gen: number, nextFireAt: string | null) {
+  if (!nextFireAt) return; // 未配置窗口：永不自动触发
+  const delay = new Date(nextFireAt).getTime() - Date.now();
+  // setTimeout 上限 2^31-1 ms：极端空档（如超长假期）超限时先短睡再重排
+  window.setTimeout(
+    () => {
+      if (gen !== summaryGen) return;
+      void armDailySummary(); // 到点重查：due 由服务端判定并弹出，然后排下一次
+    },
+    Math.min(Math.max(delay, 0), 2 ** 31 - 1),
+  );
+}
+
+/** 弹出某日总结（自动触发路径）：打开即登记已弹（只弹一次）；失败静默——下次启动补登自愈 */
+function openDailySummary(date: string) {
+  openDailySummaryWindow(date, true).catch(() => { /* 窗口/登记失败：控制面板"今日总结"入口兜底 */ });
 }
 
 /* ---- 点击 / 拖拽（09 完整形态：PetDragBounds 四约束 + 刚性看板组合 + 冻结帧） ---- */

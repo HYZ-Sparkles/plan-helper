@@ -251,6 +251,7 @@ import {
   PhXCircle,
 } from "@phosphor-icons/vue";
 import { useRoute, useRouter } from "vue-router";
+import { emitTo } from "@tauri-apps/api/event";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import CreationForm from "../components/CreationForm.vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
@@ -271,6 +272,7 @@ import {
 import { hoursFromMinutes, pauseReasonLabel, planErrorMessage } from "../lib/labels";
 import { taskProgress, taskProgressLabel } from "../lib/progress";
 import { isValidPercentValue } from "../lib/validation";
+import { SUMMARY_REFRESH_EVENT } from "../lib/summary";
 
 const route = useRoute();
 const router = useRouter();
@@ -387,7 +389,7 @@ function openCorrection(t: TaskView) {
 }
 
 /** 修正总进度：本地校验 0–100 任意正数（最多一位小数，2026-08-24 修订），
- *  服务层权威落账（差额以事件记账） */
+ *  服务层权威落账（差额以事件记账）；落账后唤醒今日总结（内容实时重算，工单 11） */
 async function applyCorrection() {
   const v = Number(correctValue.value);
   if (!isValidPercentValue(v, 0)) {
@@ -396,7 +398,10 @@ async function applyCorrection() {
   }
   correctError.value = "";
   await runLifecycle(() => correctTotalProgress(correcting.value!.id, v));
-  if (!serverError.value) correcting.value = null; // 失败保留弹窗，错误文案透出
+  if (!serverError.value) {
+    correcting.value = null; // 失败保留弹窗，错误文案透出
+    void emitTo("daily-summary", SUMMARY_REFRESH_EVENT);
+  }
 }
 
 onMounted(load);

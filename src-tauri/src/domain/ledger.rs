@@ -44,9 +44,14 @@ impl LedgerService {
     /// 要到今天结束才发生），落在今天窗口位上的历史份额求和。任何历史修正后
     /// 再次调用即得到重算值——日志是唯一真相（ADR-0009）。
     pub fn day_target(conn: &Connection, clock: &dyn Clock) -> Result<DayTarget, PlanError> {
+        Self::day_target_on(conn, clock.now().date_naive())
+    }
+
+    /// 指定日期的调整后目标（11 的今日总结按**总结归属日**取目标——补登昨日时
+    /// 口径仍是"那天该完成多少"，历史修正后同样实时重算）。
+    pub fn day_target_on(conn: &Connection, today: NaiveDate) -> Result<DayTarget, PlanError> {
         let settings = SettingsService::load(conn).map_err(db_err)?;
         let base = settings.daily_minutes as f64;
-        let today = clock.now().date_naive();
         let minutes = minutes_by_day(conn, &settings.time_windows)?;
         let Some(anchor) = minutes.keys().next().copied() else {
             return Ok(base_target(settings.daily_minutes)); // 无任何进度事件：账户无历史

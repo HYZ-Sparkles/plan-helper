@@ -314,3 +314,79 @@ export function reportPercent(taskId: number, percent: number): Promise<void> {
 export function correctTotalProgress(taskId: number, percent: number): Promise<void> {
   return invoke<void>("correct_total_progress", { taskId, percent });
 }
+
+/* ---- 今日总结（工单 11）：ADR-0009 从 ProgressLog 实时派生，不固化总结表 ---- */
+
+/** 总结中一个推进过的任务行（对应 domain::summary::SummaryTask） */
+export interface SummaryTask {
+  task_id: number;
+  name: string;
+  /** 派生总进度百分比（0–100，一位小数）——展示口径，非当日增量 */
+  percent: number;
+  /** 当日净推进分钟（撤销/下调修正后的净额） */
+  minutes: number;
+  has_subgoals: boolean;
+  /** 子目标快照（按填写顺序）：渲染"✓ 完成列表 / 进行中" */
+  subgoals: SubGoalView[];
+}
+
+/** 总结中一个推进过的计划 section（对应 domain::summary::SummaryPlan） */
+export interface SummaryPlan {
+  plan_id: number;
+  plan_name: string;
+  priority: Priority;
+  /** 已被抢占暂停标注（照常展示、推进计入总量与达标判定） */
+  preempted: boolean;
+  /** 当日净推进总耗时（含已删除任务的推进） */
+  minutes: number;
+  /** 当日有推进的任务行 */
+  tasks: SummaryTask[];
+}
+
+/** 指定日期总结的一次装配（对应 domain::summary::DailySummaryView，DailySummaryLayout） */
+export interface DailySummaryView {
+  /** 总结归属日（YYYY-MM-DD，跨午夜窗口内的事件归属窗口开始日） */
+  date: string;
+  /** 归属日 = 今天（标题"今日总结"） */
+  is_today: boolean;
+  /** 归属日 = 昨天（标题"昨日总结"，补登） */
+  is_yesterday: boolean;
+  /** 归属日是否工作日（false = 休息日加班态：无目标义务，不显示目标/进度条） */
+  workday: boolean;
+  /** 完成总量（分钟，当日全部事件净额——与工时账户达标判定同口径） */
+  total_minutes: number;
+  /** 目标（分钟）：归属日的调整后目标（含结转，工单 10 同一派生） */
+  target_minutes: number;
+  /** 基准 = 每日工作时间（分钟）：carryLabel 结转标注用 */
+  base_minutes: number;
+  /** 有更高优先级计划未开始提示 */
+  higher_priority_hint: boolean;
+  /** 推进过的计划（PlanOrdering：优先级降序 + 创建倒序）；当日零推进的不展示 */
+  plans: SummaryPlan[];
+}
+
+/** 触发状态（对应 domain::summary::DailySummaryStatus）：
+ *  启动补登检查 / 前端定时器 / 控制面板"调出总结"入口共用一次查询 */
+export interface DailySummaryStatus {
+  /** 该弹而未弹的总结日期（YYYY-MM-DD）——非空时立即弹出 */
+  due: string | null;
+  /** 最近一次已弹出的总结日期（"随时调出"的默认日期） */
+  last_shown: string | null;
+  /** 下一次自动触发时刻（RFC3339）；null = 未配置窗口，永不自动触发 */
+  next_fire_at: string | null;
+}
+
+/** 指定日期的总结视图（每次调用都从日志重算——弹出后调出、次日补登都读最新账） */
+export function getDailySummary(date: string): Promise<DailySummaryView> {
+  return invoke<DailySummaryView>("get_daily_summary", { date });
+}
+
+/** 触发状态：待弹日期 + 最近已弹日期 + 下次触发时刻 */
+export function getDailySummaryStatus(): Promise<DailySummaryStatus> {
+  return invoke<DailySummaryStatus>("get_daily_summary_status");
+}
+
+/** 登记某日总结已弹出（只弹一次；自动弹出与控制面板补看两条路都走这里，幂等） */
+export function markDailySummaryShown(date: string): Promise<void> {
+  return invoke<void>("mark_daily_summary_shown", { date });
+}

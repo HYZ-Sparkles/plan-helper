@@ -9,3 +9,4 @@ pub mod lifecycle;
 pub mod plans;
 pub mod progress;
 pub mod settings;
+pub mod summary;

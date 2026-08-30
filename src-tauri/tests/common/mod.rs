@@ -6,7 +6,7 @@ use chrono::{Local, TimeZone};
 
 use plan_helper_lib::clock::FixedClock;
 use plan_helper_lib::domain::plans::{
-    PlanDraft, PlanStatus, PlanView, SubGoalDraft, TaskDraft, TaskStatus,
+    PauseReason, PlanDraft, PlanStatus, PlanView, SubGoalDraft, TaskDraft, TaskStatus,
 };
 
 /// 固定时钟（本地时区）
@@ -78,6 +78,16 @@ pub fn force_subgoal_completed(conn: &rusqlite::Connection, subgoal_id: i64) {
     conn.execute(
         "UPDATE subgoals SET completed_at = '2026-08-24T10:00:00+08:00' WHERE id = ?1",
         rusqlite::params![subgoal_id],
+    )
+    .unwrap();
+}
+
+/// 直接落库暂停原因（工单 11 总结的"已被抢占暂停"标注 / 工单 12 抢占路径的种子；
+/// None = 清空，与 resume 同效）
+pub fn force_pause_reason(conn: &rusqlite::Connection, plan_id: i64, reason: Option<PauseReason>) {
+    conn.execute(
+        "UPDATE plans SET pause_reason = ?1 WHERE id = ?2",
+        rusqlite::params![reason.map(|r| r.as_db().to_string()), plan_id],
     )
     .unwrap();
 }
