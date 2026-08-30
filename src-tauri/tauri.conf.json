@@ -74,9 +74,10 @@
         "label": "control-panel",
         "title": "控制面板",
         "width": 1080,
-        "height": 720,
+        "height": 640,
         "minWidth": 880,
         "minHeight": 600,
+        "center": true,
         "dragDropEnabled": false,
         "visible": false
       }
