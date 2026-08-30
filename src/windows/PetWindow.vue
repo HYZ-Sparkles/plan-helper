@@ -269,8 +269,9 @@ async function restoreMiniBoard() {
 }
 
 /** 小看板刚性挂靠：以桌宠当前位置为锚重摆（板在桌宠正下方 12px、水平居中——同启动
- *  摆位）；下方放不下则**组合体整体上移**（不是把板塞进桌宠身体里），保证二者相对
- *  位置固定、不重叠（2026-08-29 反馈：一个被边界挡住另一个也一起让位）。 */
+ *  摆位）；贴边/贴底放不下时**组合体让位**（2026-08-29 反馈：一个被边界挡住另一个也
+ *  一起让位）。贴边钳制后桌宠**回正到看板正中上方**（2026-08-30 反馈：宁可移动桌宠，
+ *  不把看板歪着放——"桌宠在小看板正中上方"是显示不变式）。 */
 async function attachBoardRigidly() {
   const mini = await WebviewWindow.getByLabel("mini-board");
   if (!mini) return;
@@ -289,9 +290,11 @@ async function attachBoardRigidly() {
       petY = Math.max(petY - overflow, area.y); // 顶部极端时以桌宠可见优先
       boardY = petY + s.height + gap;
     }
+    // 桌宠对准看板中心（boardX 已钳进工作区且看板比桌宠宽 → 结果必在工作区内，无需再钳）
+    const petX = Math.round(boardX + (board.width - s.width) / 2);
     board.x = boardX;
     board.y = Math.round(boardY);
-    mover.moveTo(pet.x, petY);
+    mover.moveTo(petX, petY);
     await mini.setPosition(new PhysicalPosition(board.x, board.y));
   }
   await mini.show();
@@ -595,7 +598,7 @@ async function positionMenu() {
 
 <template>
   <!-- 拖拽/点击区 = 窗口整面（桌宠本体即窗口）；startup/goodbye 期 pointer-events 关掉交互。
-       左键点击唤/收小看板、右键点击菜单、右键拖动移动（2026-08-30 反馈）；拦截浏览器原生右键菜单 -->
+       左键点击唤/收小看板、右键点击菜单、右键拖动移动（2026-08-30 反馈）；原生右键菜单已在 main.ts 全局静默 -->
   <div
     class="pet-shell"
     :class="{ frozen: interactionsOff() }"
@@ -603,7 +606,6 @@ async function positionMenu() {
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
     @pointercancel="onPointerUp"
-    @contextmenu.prevent
   >
     <PetSprite :anim="sprite.anim" :frame="sprite.frame" :flip="sprite.flip" :fade-signal="sprite.flick" />
   </div>
