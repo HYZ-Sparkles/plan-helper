@@ -286,6 +286,8 @@ impl SettingsService {
     ) -> Result<NaiveDate, PlanError> {
         let today = clock.now().date_naive();
         validate(s, today)?;
+        // 时间窗口归一化（保存时合并重叠/首尾相接的段——所见即所存的是合并结果）
+        let windows = merge_time_windows(&s.time_windows)?;
         let cal = Self::calendar(conn).map_err(db_err)?;
         let current = cal.for_date(today);
         let delayed_changed = s.daily_minutes != current.daily_minutes
@@ -307,7 +309,7 @@ impl SettingsService {
             params![
                 s.daily_minutes,
                 json(&s.workdays),
-                json(&s.time_windows),
+                json(&windows),
                 s.smoothing_workdays,
                 clock.now().to_rfc3339(),
             ],
@@ -320,7 +322,7 @@ impl SettingsService {
                 params![
                     s.daily_minutes,
                     json(&s.workdays),
-                    json(&s.time_windows),
+                    json(&windows),
                     effective_from.to_string(),
                     clock.now().to_rfc3339(),
                 ],
@@ -381,6 +383,70 @@ fn validate(s: &Settings, today: NaiveDate) -> Result<(), PlanError> {
         });
     }
     Ok(())
+}
+
+/// 时间窗口归一化：重叠或**首尾相接**（端点左闭右开语义下的连续段，2026-08-30 用户
+/// 决策）合并为一段，按 start 升序返回。跨午夜窗口先拆成 [0,1440) 内的线性段参与
+/// 合并、再按"穿过午夜"重新组装；并集覆盖全天时返回 Err——TimeWindow 无法表达
+/// start==end 的全天窗口（用户决策：拒绝保存并提示，不改领域语义）。
+pub(crate) fn merge_time_windows(windows: &[TimeWindow]) -> Result<Vec<TimeWindow>, PlanError> {
+    // 1) 展开为线性段：常规窗口一段；跨午夜拆"当晚 + 凌晨"两段（end == 0 的凌晨段为空，丢弃）
+    let mut segs: Vec<(u32, u32)> = Vec::new();
+    for w in windows {
+        let (s, e) = (u32::from(w.start_minute), u32::from(w.end_minute));
+        if s < e {
+            segs.push((s, e));
+        } else if s > e {
+            segs.push((s, 1440));
+            if e > 0 {
+                segs.push((0, e));
+            }
+        }
+        // s == e 不会到这里：validate 先按行拒绝（即使漏进来了，下方也会以全天覆盖拒绝）
+    }
+    // 2) 线性合并：排序后相邻相接（next.start <= cur.end）即并
+    segs.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::new();
+    for &(s, e) in &segs {
+        match merged.last_mut() {
+            Some(last) if s <= last.1 => last.1 = last.1.max(e),
+            _ => merged.push((s, e)),
+        }
+    }
+    if merged.len() == 1 && merged[0] == (0, 1440) {
+        return Err(PlanError::InvalidSettings {
+            reason: "时间窗口并集不能覆盖全天".into(),
+        });
+    }
+    // 3) 组装回窗口：线性合并不会连接"末段到午夜 + 首段从零点"的跨午夜相接，
+    //    先按段还原（尾段 1440 = 次日零点 → end 记 0），再补一次首尾穿午夜合并
+    let mut out: Vec<TimeWindow> = merged
+        .iter()
+        .map(|&(s, e)| TimeWindow {
+            start_minute: s as u16,
+            end_minute: (e % 1440) as u16,
+        })
+        .collect();
+    if out.len() >= 2 {
+        let last = out.last().unwrap();
+        let first = out.first().unwrap();
+        if last.end_minute == 0 && first.start_minute == 0 {
+            if first.end_minute >= last.start_minute {
+                // 首尾拼起来覆盖全天（含恰好首尾相接的整圈）
+                return Err(PlanError::InvalidSettings {
+                    reason: "时间窗口并集不能覆盖全天".into(),
+                });
+            }
+            let joined = TimeWindow {
+                start_minute: last.start_minute,
+                end_minute: first.end_minute,
+            };
+            out.pop();
+            out[0] = joined;
+        }
+    }
+    out.sort_by_key(|w| w.start_minute);
+    Ok(out)
 }
 
 /// 某日零点（本地时区）。窗口时刻的拼装共用（next_window_start / summary 触发）。

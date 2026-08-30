@@ -302,3 +302,49 @@ fn is_work_time_uses_effective_config_per_day() {
     assert!(!SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 25, 12, 0)).unwrap(), "周二 12:00 按新窗口（08:00–09:00）判窗外");
     assert!(SettingsService::is_work_time(&conn, &fixed_clock(2026, 8, 25, 8, 30)).unwrap(), "周二 08:30 按新窗口判窗内");
 }
+
+#[test]
+fn save_merges_overlapping_and_adjacent_windows() {
+    // 测试情况（2026-08-30 用户反馈）：保存时提交重叠 / 首尾相接 / 跨午夜相接的窗口。
+    // 正确结果：全部合并为一段（含跨午夜拆段重组与首尾穿午夜合并），按 start 升序；
+    //           不相接的窗口原样保留。
+    let conn = db::open_in_memory().unwrap();
+    let clock = fixed_clock(2026, 8, 24, 12, 0);
+    let save_windows = |windows: &[TimeWindow]| {
+        let mut s = SettingsService::load(&conn).unwrap(); // FirstRun 落默认行
+        s.time_windows = windows.to_vec();
+        SettingsService::save(&conn, &clock, &s).unwrap();
+        SettingsService::load(&conn).unwrap().time_windows
+    };
+    let tw = |a: u16, b: u16| TimeWindow { start_minute: a, end_minute: b };
+
+    // 重叠：09:00–11:30 与 11:00–12:30 → 09:00–12:30
+    assert_eq!(save_windows(&[tw(600, 690), tw(660, 750)]), vec![tw(600, 750)]);
+    // 首尾相接：09:00–12:00 与 12:00–18:00 → 09:00–18:00
+    assert_eq!(save_windows(&[tw(540, 720), tw(720, 1080)]), vec![tw(540, 1080)]);
+    // 跨午夜 + 凌晨相接：20:00–01:00 与 01:00–05:00 → 20:00–05:00（跨午夜）
+    assert_eq!(save_windows(&[tw(1200, 60), tw(60, 300)]), vec![tw(1200, 300)]);
+    // 显式凌晨窗被跨午夜窗吸收：20:00–00:00 与 00:00–05:00 → 20:00–05:00
+    assert_eq!(save_windows(&[tw(1200, 0), tw(0, 300)]), vec![tw(1200, 300)]);
+    // 不相接：保持两段，按 start 升序
+    assert_eq!(save_windows(&[tw(720, 780), tw(600, 660)]), vec![tw(600, 660), tw(720, 780)]);
+}
+
+#[test]
+fn save_rejects_windows_covering_full_day() {
+    // 测试情况（2026-08-30 用户决策）：多段合并后并集覆盖全天（09:00–22:00 与
+    //           20:00–10:00 跨午夜相接拼成整圈）。
+    // 正确结果：save 被拒（InvalidSettings"时间窗口并集不能覆盖全天"）——
+    //           TimeWindow 无法表达 start==end 的全天窗口，报错而非改语义。
+    let conn = db::open_in_memory().unwrap();
+    let clock = fixed_clock(2026, 8, 24, 12, 0);
+    let mut s = SettingsService::load(&conn).unwrap();
+    s.time_windows = vec![
+        TimeWindow { start_minute: 540, end_minute: 1320 },
+        TimeWindow { start_minute: 1200, end_minute: 600 },
+    ];
+    let err = SettingsService::save(&conn, &clock, &s).unwrap_err();
+    assert!(matches!(err, plan_helper_lib::domain::plans::PlanError::InvalidSettings { .. }));
+    // 库里保持默认窗口（校验先于变更）
+    assert_eq!(SettingsService::load(&conn).unwrap().time_windows, Settings::default().time_windows);
+}

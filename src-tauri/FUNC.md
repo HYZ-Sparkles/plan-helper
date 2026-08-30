@@ -74,6 +74,7 @@
   - `SettingsService::is_workday(conn, clock) -> bool` / `is_workday_on(conn, date) -> bool` — "现在"/指定日期的工作日判定（按日解析）；allocation 的面板 workday 标记 / should_auto_open / 小看板加班态共用
   - `is_work_time(conn, clock) -> bool` — 现在是否处于工作时间（端点左闭右开）；跨午夜窗口按 story 54 归属窗口开始日：今晚段按**今天**的配置判、凌晨段（t < end）按**昨天**的配置判（窗口开始日拥有整段窗口）。桌宠初始模式判定（08）与 13 的窗口触发共用
   - `next_window_start(conn, clock) -> Option<DateTime<Local>>` — 下一个工作窗口**开始**时刻（多段窗口取当日最早的未来段；跨午夜的凌晨尾巴不算新开始；None = 未配置窗口或一年内无工作日）——AutoOpenMainBoard 的"工作窗口开始时"触发排程（13）
+  - `merge_time_windows(&[TimeWindow]) -> Result<Vec<TimeWindow>, PlanError>` — pub(crate) 时间窗口归一化（2026-08-30 用户反馈）：保存时合并重叠或**首尾相接**的段（跨午夜窗口拆线性段参与合并再穿午夜重组，按 start 升序）；并集覆盖全天返回 InvalidSettings（TimeWindow 无法表达 start==end，用户决策拒绝保存而非改语义）。save 落库前调用，设置行与版本行都写合并结果
   - `updated_at(conn) -> Option<DateTime<Local>>` — 最近保存时刻
 - `settings::Settings / TimeWindow / DateOverride` — serde 结构，与前端 `src/lib/api.ts` 类型一一对应（DateOverride {date: NaiveDate〔serde = "YYYY-MM-DD" 字符串〕, working}：这天工作=调休 / 这天不工作=假期；独立表 date_overrides、全量替换——例外天然锚定具体日期，不进版本历史）
 - `ledger::LedgerService`（工单 10；ADR-0007 对称均分、ADR-0009 单一事实源，术语 WorkHourLedger / DailyCompletionTolerance / LoadSmoothing；工单 13 起逐日按生效配置回放——基准与"是否工作日"取该日期的解析结果，历史与当日不被新配置改写）
@@ -108,7 +109,7 @@
 
 ## 测试先例（tests/）
 
-- `seam_settings.rs` — FirstRun 默认值 / 保存往返（含生效日返回）/ 快照组装；工单 13：延时字段下一个工作日生效（周一改每日工作时间 → 当日解析仍 300、周二起 400）、均分窗口与例外立即生效（不追加版本）、日期例外双向覆盖周循环、非法设置全拒且库不变（窗口起止相同/均分 0/每日 0）、next_window_start（窗前/段间/段内/周五晚跳周末/例外标休顺延/未配置窗口 None）、is_work_time 按日生效配置判定（周一改窗口当日仍按旧窗、周二按新窗）
+- `seam_settings.rs` — FirstRun 默认值 / 保存往返（含生效日返回）/ 快照组装；工单 13：延时字段下一个工作日生效（周一改每日工作时间 → 当日解析仍 300、周二起 400）、均分窗口与例外立即生效（不追加版本）、日期例外双向覆盖周循环、非法设置全拒且库不变（窗口起止相同/均分 0/每日 0）、next_window_start（窗前/段间/段内/周五晚跳周末/例外标休顺延/未配置窗口 None）、保存时窗口合并（重叠/首尾相接/跨午夜相接各归一段、不相接保持原序、并集覆盖全天拒绝且库不变——2026-08-30 验收反馈）、is_work_time 按日生效配置判定（周一改窗口当日仍按旧窗、周二按新窗）
 - `seam_plans.rs` — 创建校验（空任务/缺耗时/空名/子目标必拒）、持久化字段回读、PlanOrdering 排序、文件库重开不丢；工单 03：get/NotFound、编辑字段落库、已开始锁优先级、已完成任务锁定、任务集一致、重排未完成在前已完成沉底、追加任务落位、软删除归档
 - `seam_subgoals.rs`（工单 04）— 子目标：填写顺序落库/estimated=求和、行内容与耗时必填、编辑改/增/删未完成行且新行沉最后、已完成子目标锁定（改名/删除/随清空消失都拒）、取消勾选清空、进度按已完成分钟缩放（60%→42.86%→37.5%→75%）；依赖：下标引用落库与等待判定随完成变化、环/自指/越界拒绝、link 跨计划与长环拒绝、编辑全量替换边（含新任务解析）、删任务双向解除后继解锁
 - `seam_lifecycle.rs`（工单 05）— 状态机 5×4 全矩阵（合法转换落库、非法拒绝 PlanStatusInvalid 且状态不变、终态重启全拒）、不存在 id 全 NotFound、手动暂停记 UserInitiated/继续清空、完成计划前置（有未完成任务/删空拒 TasksNotCompleted，全完成后成功且终态）、任务 100% 自动完成（部分勾选不完成、全勾转已完成、幂等、无子目标不误判）、复制并新建（字段/任务/子目标/依赖边复制、进度归零、"- 副本"、直接进行中、旧计划保持终态、新计划优先级锁定、非终态拒 PlanNotTerminal）；手动排序测试已随功能砍掉移除（2026-08-24，默认排序断言在 seam_plans）

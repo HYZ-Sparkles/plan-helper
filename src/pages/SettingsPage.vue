@@ -6,6 +6,7 @@
     桌宠重排两个定时触发、看板重取目标。
   -->
   <section>
+    <div class="col">
     <h2 class="page-title">设置</h2>
 
     <template v-if="loaded">
@@ -60,7 +61,7 @@
         <button type="button" class="link-btn" @click="addWindow">
           <PhPlus :size="14" /> 添加时间段
         </button>
-        <p class="hint">可多段（如 10:00–11:30 与 20:00–22:00）；结束早于开始即跨午夜（如 20:00–01:00）；改动自下一个工作日生效</p>
+        <p class="hint">可多段（如 10:00–11:30 与 20:00–22:00）；结束早于开始即跨午夜（如 20:00–01:00）；保存时自动合并重叠或首尾相接的段；改动自下一个工作日生效</p>
       </div>
 
       <div class="group">
@@ -117,6 +118,7 @@
       </div>
     </template>
     <p v-else class="hint">正在读取设置……</p>
+    </div>
   </section>
 </template>
 
@@ -156,7 +158,9 @@ const saving = ref(false);
 const error = ref("");
 const savedHint = ref("");
 
-onMounted(async () => {
+/** 从服务端装载最新设置到表单（mount 首载与保存后回读共用——保存时服务端可能
+ *  已合并时间窗口、或延时字段已过生效日，回读让编辑态始终所见即所存） */
+async function reload() {
   const snap = await getAppState();
   const s = snap.settings;
   dailyHours.value = String(s.daily_minutes / 60);
@@ -168,7 +172,9 @@ onMounted(async () => {
   overrides.value = [...s.date_overrides];
   smoothing.value = String(s.smoothing_workdays);
   loaded.value = true;
-});
+}
+
+onMounted(reload);
 
 /** 切换一枚工作日 chip（已在集合中则移除，否则加入） */
 function toggleWorkday(day: number) {
@@ -247,6 +253,7 @@ async function save() {
       effective > localToday()
         ? `已保存：工作时间类改动自 ${effective} 起生效，均分窗口与日期例外已生效`
         : "已保存，设置立即生效";
+    await reload(); // 回读服务端设置：重叠/相接的时间窗口已在保存时合并，列表如实反映
   } catch (e) {
     error.value = planErrorMessage(e as { kind?: string; payload?: unknown });
   } finally {
@@ -256,8 +263,13 @@ async function save() {
 </script>
 
 <style scoped>
-.group {
+/* 整列居中（窗口最大化时内容不再靠左）；分组块随列宽 */
+.col {
   max-width: 560px;
+  margin: 0 auto;
+}
+
+.group {
   border: var(--border-default);
   border-radius: var(--radius-md);
   background: var(--bg-group);

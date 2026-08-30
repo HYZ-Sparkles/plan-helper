@@ -215,6 +215,10 @@ body.transparent-root {
 
 /* 文字链接型按钮（弹层 footer 的"今天/清除"等轻操作） */
 .link-btn {
+  /* 图标 + 文字的轻操作按钮：inline-flex 让图标垂直居中（基线对齐会让图标偏上） */
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
