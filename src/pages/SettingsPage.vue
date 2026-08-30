@@ -6,7 +6,8 @@
     桌宠重排两个定时触发、看板重取目标。
   -->
   <section>
-    <div class="col">
+    <!-- 页面宽度归壳层统一内容列（ControlPanelWindow，720px），无页内列宽 -->
+    <div>
     <h2 class="page-title">设置</h2>
 
     <template v-if="loaded">
@@ -263,12 +264,6 @@ async function save() {
 </script>
 
 <style scoped>
-/* 整列居中（窗口最大化时内容不再靠左）；分组块随列宽 */
-.col {
-  max-width: 560px;
-  margin: 0 auto;
-}
-
 .group {
   border: var(--border-default);
   border-radius: var(--radius-md);

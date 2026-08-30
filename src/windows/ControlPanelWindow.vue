@@ -16,7 +16,12 @@
       </nav>
     </aside>
     <main class="content">
-      <RouterView />
+      <!-- 页面内容列：壳层统一限宽居中（工单 15 第二轮反馈：三页各自定义列宽时
+           切换导航左右边距大幅位移——统一 720px 后边距恒定）。列宽经 --col-max
+           注入 tokens.css 全局 .content-col，与大面板/总结窗同一模式 -->
+      <div class="content-col">
+        <RouterView />
+      </div>
     </main>
   </div>
 </template>
@@ -88,6 +93,7 @@ onMounted(async () => {
 }
 
 .content {
+  --col-max: 720px; /* 页面统一内容列宽（创建/详情表单的原宽度，列表/设置随之看齐） */
   flex: 1;
   min-width: 0;
   padding: 24px;

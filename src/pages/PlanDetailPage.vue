@@ -463,11 +463,8 @@ watch(() => route.params.id, load);
 </script>
 
 <style scoped>
-/* 内容列：限宽 + 居中（窗口拉大时空白均分两侧），窄窗口自动收缩 */
+/* 页面骨架：纵向叠放（宽度归壳层统一内容列 ControlPanelWindow，720px） */
 .detail-page {
-  max-width: 720px;
-  width: 100%;
-  margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 16px;

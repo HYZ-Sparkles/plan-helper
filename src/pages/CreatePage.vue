@@ -1,6 +1,7 @@
 <template>
-  <!-- 创建计划：CreationUI 的创建模式入口（表单本体在 CreationForm，与详情页编辑态共用） -->
-  <section class="create-page">
+  <!-- 创建计划：CreationUI 的创建模式入口（表单本体在 CreationForm，与详情页编辑态共用）；
+       页面宽度归壳层统一内容列（ControlPanelWindow，720px） -->
+  <section>
     <h2 class="page-title">创建计划</h2>
     <CreationForm mode="create" @saved="router.push('/control-panel/plans')" />
   </section>
@@ -12,12 +13,3 @@ import CreationForm from "../components/CreationForm.vue";
 
 const router = useRouter();
 </script>
-
-<style scoped>
-/* 内容列：限宽 + 居中（窗口拉大时空白均分两侧），窄窗口自动收缩 */
-.create-page {
-  max-width: 720px;
-  width: 100%;
-  margin: 0 auto;
-}
-</style>

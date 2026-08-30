@@ -5,7 +5,8 @@
     排序 = PlanOrdering 默认规则（优先级降序 + 创建倒序，唯一排序；
     2026-08-24 决策砍掉手动拖拽排序——实施顺序在大面板自主选择，列表手动序无意义）。
   -->
-  <section class="plans-col">
+  <!-- 页面宽度归壳层统一内容列（ControlPanelWindow，720px） -->
+  <section>
     <div class="title-row">
       <h2 class="page-title">计划管理</h2>
       <!-- 页面级入口聚右（2026-08-30 用户决策）：图标按钮 + 悬停原生 tooltip——
@@ -146,13 +147,6 @@ async function openSummary() {
 </script>
 
 <style scoped>
-/* 内容列：限宽 + 居中（计划卡内容行不长，全宽拉伸反而显得空），窄窗口自动收缩 */
-.plans-col {
-  max-width: 840px;
-  width: 100%;
-  margin: 0 auto;
-}
-
 /* 标题行：标题在左，页面级入口（图标按钮）聚右 */
 .title-row {
   display: flex;

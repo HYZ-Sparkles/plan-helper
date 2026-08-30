@@ -36,7 +36,7 @@
 
 | 窗口/组件 | token 色值 | 圆角/阴影 | 图标 | 优先级视觉 | emoji | 布局（最大化） |
 |---|---|---|---|---|---|---|
-| 控制面板壳 | ✓ 全 token | ✓ 侧栏线 1px | ✓ 侧栏 PhListBullets/PhPlus/PhGear | — | ✓ | ✓ 侧栏固定宽 + 页面级内容列居中（840/720/560px） |
+| 控制面板壳 | ✓ 全 token | ✓ 侧栏线 1px | ✓ 侧栏 PhListBullets/PhPlus/PhGear | — | ✓ | ✓ 侧栏固定宽 + **壳层统一内容列 720px（第二轮反馈收口）** |
 | 计划管理页 | ✓ | ✓ 卡片线 + 4px 优先级边条 | ✓ 标题行 icon-btn 双钮 | ✓ PriorityLabel + 边条 | ✓ | ✓ 840px 居中列 |
 | 创建/详情页 | ✓ | ✓ 分段选中=下缘 3px 主色条 | ✓ PhPlay/PhPause/PhXCircle/PhCopySimple/PhPencilSimple 等 | ✓ segmented 内嵌 PriorityLabel | ✓ | ✓ 720px 居中列 |
 | 设置页 | ✓（修复 --color-success） | ✓ 分组 stone-50 | ✓ 五组标题图标 | — | ✓ | ✓ 560px 居中列 |
@@ -56,3 +56,9 @@
 - **（Standards：Duplicated Code）限宽块收编全局类**：`.header-inner`/`.content-col`/`.footer-inner` 的"max-width + width + margin auto + border-box"四件套在两窗重复 5 处 → 收进 tokens.css：`.content-col`（限宽块，列宽经窗口根 `--col-max` 变量注入：大面板 724px / 总结 564px）、`.content-col-scroll`（主体档：滚动收进列自身）、`.thin-scrollbar`（6px 细滚动条；小看板 picker-list 的 scoped 同款一并收编）；两窗 scoped 只留 flex/grid 结构与 `--col-max` 一行。
 - **（Spec：滚动条对齐破绽）滚动收进内容列**：原方案主体 `overflow:auto` 在内容超高出现经典滚动条时主体变窄 ~17px、头/体/底三段错位（默认 780 窗口任务多时即可复现）——改 `.content-col-scroll` 把滚动移到列自身，滚动条贴列右缘，三段对齐与滚动状态无关；滚动条本身用 `.thin-scrollbar` 消掉默认粗条。
 - **（Spec 报备的越界项）**：tauri.conf 给 main-board（560×480）/daily-summary（520×480）补 minWidth/minHeight 属"防拉窄挤压"的预防性约束，验收项未直接要求——保留，理由是用户反馈「整齐」在任意窗口尺寸下成立；FUNC.md 大面板条目顺带回填了 2026-08-29 已落地的休息日加班态描述（文档滞后修正）。
+
+**验收反馈修正（2026-08-30，第二轮：控制面板页面比例统一）**
+
+- 反馈：计划管理（840px）/ 创建与详情（720px）/ 设置（560px）各自定义内容列宽，切换导航时内容左右边距大幅位移（840→560 每侧跳 ~140px），观感差。
+- 修法：内容列收口到**壳层一处**——`ControlPanelWindow .content` 设 `--col-max: 720px` 包住 RouterView，四个子页共用一列、左右边距恒定；各页自身的 max-width/margin 全部删除（`.plans-col`/`.create-page`/`.detail-page` 限宽与 `.col` 整块移除，详情页只留 flex 骨架）。720 = 创建/详情表单的原宽度（两轮验收打磨过的表单宽度），列表与设置看齐；窄窗口（<976 内容区）列自动收缩的行为不变。
+- 复用：与大面板/总结窗同走 tokens.css `.content-col` + `--col-max` 模式——三个可缩放窗口的"内容列"现在只有一份实现，各窗口只声明自己的列宽。
