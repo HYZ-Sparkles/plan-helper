@@ -41,7 +41,7 @@ import { autoDirection, PetEngine, type EngineState, type PetMover } from "../li
 import { createTauriMover } from "../lib/pet/tauriMover";
 import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dragBounds";
 import { afterDragSteps, pickRandomKind, RANDOM_INTERVAL_MS, randomSteps, type Pose } from "../lib/pet/actions";
-import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
+import { MENU_ACTION_EVENT, MENU_CLOSED_EVENT, MENU_CLOSE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
 import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
@@ -521,8 +521,11 @@ function onPointerUp() {
   drag = null;
   if (!d || !mover) return;
   if (!d.moved) {
-    // 单击分流（2026-08-30 反馈）：左键唤/收小看板，右键菜单
-    if (d.btn === 0) void toggleMiniBoard();
+    // 单击分流（2026-08-30 反馈）：左键工作模式唤/收小看板（休息模式弹提示气泡）、右键菜单
+    if (d.btn === 0) {
+      if (mode.value === "work") void toggleMiniBoard();
+      else void showRestHint();
+    }
     if (d.btn === 2) void toggleMenu();
     return;
   }
@@ -593,6 +596,13 @@ async function positionMenu() {
   y = Math.min(Math.max(y, area.position.y), area.position.y + area.size.height - menuSize.height);
   await menu.setPosition(new PhysicalPosition(x, y));
   await revealWindow("pet-menu");
+}
+
+/** 休息模式左键提示（2026-08-30 反馈）：桌宠头顶冒气泡「右键才是菜单喵」，菜单窗
+ *  气泡形态自动收起（计时在菜单窗侧）。摆位/亮出与菜单共用 positionMenu */
+async function showRestHint() {
+  await emitTo("pet-menu", MENU_HINT_EVENT);
+  await positionMenu();
 }
 </script>
 
