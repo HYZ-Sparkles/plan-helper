@@ -108,28 +108,28 @@ npm run tauri dev
   - 显示当前正在完成的任务名称，属于哪个计划。如果有子目标的显示目前需要完成的子目标。
 
 ### 桌宠模块
-资源包存放在 "./resourses/" 目录下
+资源包存放在 "./resourses/awesome-codex-pet" 目录下，现采用 codex 桌宠融合。
 
-种类：
-- 像素风格动物：使用Oreo Cat
-- 美少女：默认模型:**Live2D 官方 Natori**
+种类：偏向于可爱小动物类型，后续进行选择，个数5个差不多。
 
-用户动作对应桌宠动作(Oreo Cat)
-- 启动应用：21 Ear Up->22 Scan->23 Ear Down->24 Jump out the box->7 Stand Idle
-- 由工作模式进入休息模式：6 Sleep to Stand
-- 由休息模式进入工作模式：4 Stand to Sleep
+用户动作对应桌宠动作(codex)
+- 启动应用：waving
 - 休息模式
-  - 常驻：7 Stand Idle(循环)/2 Sit Idle
-  - 随机动作
-    - 跑去吃饭，先从桌面上朝着左边或者右边跑一些距离，吃，走回来原来的位置：10 Run->8 Eat->9 Walk
-    - 来回跳，跳到左边或者右边去然后跳回来：14 Jump(两次)
-  - 常驻一段时间后概率性使用一个随机动作后从站立到坐着状态转换 1 Stand to Sit/3 Sit to Stand
-- 工作模式：5 Sleep Idle(循环)
-- 鼠标拖动：保持当前帧不动，移动完了才继续
-  - 移动完了**如果是休息模式**那么看是否是站立状态，不是则先站起来(3 Sit to Stand)，然后 15 Attack
-- 退出应用：17 Jump in to the box
+  - 常驻：idel
+  - 每5min概率性(50%)触发随机动作：
+    - 跳跃：jumping
+    - 自行移动：在桌面上小范围移动 running-right/running-left
+  - v2版本 跟着鼠标环视16方向
+- 工作模式：running
+  - 小面板完成一个子目标或者推进了任务进度：review
+- 鼠标拖动：running-right/running-left，对应不同方向的拖动
+- 大面板选择今日任务：waiting
+- 今日总结：
+  - 任务没有达标 -> failed
+  - 全部任务完成 -> jumping
 
 在用户产生动作时，桌宠的动作需要先播放完才执行新的动作放置割裂感。
+
 ## 后期拓展
 这一部分暂时不需要设计，在上述功能全部完善之后才考虑。
 
