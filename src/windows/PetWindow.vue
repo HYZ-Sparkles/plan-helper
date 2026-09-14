@@ -52,7 +52,6 @@ import {
   RANDOM_INTERVAL_MS,
   RANDOM_PROBABILITY,
   reviewSteps,
-  wavingSteps,
   type RoamPlan,
 } from "../lib/pet/actions";
 import { classifyDrag, type DragFeedback, type DragSample } from "../lib/pet/dragGesture";
@@ -112,11 +111,10 @@ onMounted(async () => {
       void emitTo("pet-menu", MENU_STATE_EVENT, { locked: s.locked });
     }
   });
-  // 启动序列先行（不依赖位移），mover 异步就绪后补注入；waving 3 遍 ≈ 2.1s
-  // （codex 应用状态动画节奏，2026-09-14 二次校准），期间交互禁用
+  // 启动序列先行（不依赖位移），mover 异步就绪后补注入
   engine.request({
     lock: true,
-    steps: wavingSteps(),
+    steps: [{ anim: "waving" }],
     onSettle: onStartupSettled,
   });
   // 初始模式按工作时间判定（invoke 毫秒级、waving 约 0.7s，来得及在播完前落定）
