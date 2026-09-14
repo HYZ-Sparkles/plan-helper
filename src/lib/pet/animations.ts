@@ -1,61 +1,73 @@
 /**
- * Oreo Cat 帧清单（由 scripts/gen-pet-frames.mjs 从 resourses/ 的 sprite sheet 程序化生成——勿手改，
- * 资产更新或帧边界修正后重跑脚本）。帧矩形为 sheet 像素坐标；行高 32、地面线 = 帧矩形底边，
- * 渲染时按底部锚定统一站高。fps 为默认值（资源无时序元数据），可在 /dev/anim 调试页试拍后改 META。
+ * codex 桌宠契约动画数据（工单 16，CodexPetContract / ADR-0010）：
+ * 单张雪碧图 = 固定 8 列网格、格 192×208（v1 图集 1536×1872 = 9 行、v2 1536×2288 = 11 行），
+ * 第 0–8 行是 9 个标准动作、v2 第 9–10 行是 16 向环视静态姿势；每帧时长由契约硬性规定
+ * （awesome-codex-pet .agents/skills/hatch-pet-v1/references/animation-rows.md）。
+ * 形象只是皮肤（skins.ts 注册表），本文件对所有形象成立；替代 Oreo 的
+ * "fps + 非透明列段检测 + NUDGE/帧序/位移权重" 验收调整管线（契约无调参空间）。
  */
-export const PET_SHEET_URL = "/pet/oreo-sheet.png";
-export const SHEET_SCALE = 2;
-export const SHEET_WIDTH = 462;
-export const SHEET_HEIGHT = 766;
 
-/** 单帧在 sheet 上的矩形（像素坐标） */
-export interface FrameRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-  /** 摆放微调（素材像素，正 = 右 / 下；×SHEET_SCALE 后生效）。切分不动只调摆放——
-   *  值来自生成脚本的 NUDGE 表（验收时在 /dev/anim 调试页试出后写回） */
-  ox?: number;
-  oy?: number;
-}
+/** 契约动作名（= 图集行序 0–8；键序即行序，勿重排） */
+export type PetAnim =
+  | "idle"
+  | "running-right"
+  | "running-left"
+  | "waving"
+  | "jumping"
+  | "failed"
+  | "waiting"
+  | "running"
+  | "review";
+
+/** 契约网格常量：8 列 × 192×208 格 */
+export const GRID_COLS = 8;
+export const CELL_W = 192;
+export const CELL_H = 208;
+/** 渲染缩放：÷2 整数缩放保证像素干净（ADR-0010） */
+export const SHEET_SCALE = 2;
+/** 桌宠窗口逻辑尺寸 = 格 × 缩放 */
+export const PET_WIN = { width: (CELL_W * SHEET_SCALE) / 2, height: (CELL_H * SHEET_SCALE) / 2 };
 
 export interface AnimationDef {
-  name: string;
-  /** 默认播放速度（帧/秒） */
-  fps: number;
-  /** 播完是否循环（idle 类为 true） */
+  /** 图集行号（0–8） */
+  row: number;
+  /** 本行使用的列数（其余列契约保证全透明） */
+  cols: number;
+  /** 每帧时长（ms，长 = cols；契约硬性规定） */
+  durations: number[];
+  /** 天然是否循环（一次性演出可在 StepSpec 用 loop:false + repeats 截断） */
   loop: boolean;
-  /** 每帧位移权重（按 frames 播放顺序）：第 i 帧期间走过的距离占比 = w[i]/Σw；缺省 = 均匀。
-   *  值来自生成脚本的 MOVE_WEIGHTS 表（运动类动画在 /dev/anim 调试页试出后写回） */
-  moveWeights?: number[];
-  frames: FrameRect[];
+  /** durations 前缀和（长 = cols + 1，末项 = 行总时长）——引擎步进查表用，勿手填 */
+  cum: number[];
 }
 
-/** 24 个动画，键 = 作者标注的动画编号（README 动作映射引用的编号体系） */
-export const ANIMATIONS: Record<number, AnimationDef> = {
-  1: { name: "Stand to Sit", fps: 7, loop: false, frames: [{ x: 5, y: 0, w: 25, h: 32 }, { x: 34, y: 0, w: 29, h: 32 }, { x: 69, y: 0, w: 27, h: 32 }, { x: 103, y: 0, w: 26, h: 32 }] },
-  2: { name: "Sit Idle", fps: 4, loop: true, frames: [{ x: 4, y: 32, w: 26, h: 32 }, { x: 37, y: 32, w: 26, h: 32 }, { x: 70, y: 32, w: 26, h: 32 }, { x: 103, y: 32, w: 26, h: 32 }] },
-  3: { name: "Sit to Stand", fps: 7, loop: false, frames: [{ x: 4, y: 64, w: 26, h: 32 }, { x: 36, y: 64, w: 27, h: 32 }, { x: 67, y: 64, w: 29, h: 32 }, { x: 104, y: 64, w: 25, h: 32 }] },
-  4: { name: "Stand to Sleep", fps: 7, loop: false, frames: [{ x: 5, y: 96, w: 25, h: 32 }, { x: 34, y: 96, w: 29, h: 32 }, { x: 69, y: 96, w: 27, h: 32 }, { x: 103, y: 96, w: 26, h: 32 }, { x: 136, y: 96, w: 24, h: 32 }] },
-  5: { name: "Sleep Idle", fps: 4, loop: true, frames: [{ x: 4, y: 128, w: 24, h: 32 }, { x: 37, y: 128, w: 24, h: 32 }, { x: 70, y: 128, w: 24, h: 32 }, { x: 103, y: 128, w: 24, h: 32 }, { x: 136, y: 128, w: 25, h: 32 }] },
-  6: { name: "Sleep to Stand", fps: 7, loop: false, frames: [{ x: 4, y: 160, w: 24, h: 32 }, { x: 37, y: 160, w: 26, h: 32 }, { x: 69, y: 160, w: 27, h: 32 }, { x: 100, y: 160, w: 29, h: 32 }, { x: 137, y: 160, w: 25, h: 32 }] },
-  7: { name: "Stand Idle", fps: 4, loop: true, frames: [{ x: 5, y: 192, w: 25, h: 32 }, { x: 36, y: 192, w: 27, h: 32 }, { x: 67, y: 192, w: 29, h: 32 }, { x: 102, y: 192, w: 27, h: 32 }, { x: 137, y: 192, w: 25, h: 32 }] },
-  8: { name: "Eat", fps: 6, loop: false, frames: [{ x: 1, y: 224, w: 29, h: 32 }, { x: 36, y: 224, w: 27, h: 32 }, { x: 67, y: 224, w: 29, h: 32 }, { x: 102, y: 224, w: 27, h: 32 }] },
-  9: { name: "Walk", fps: 7, loop: false, frames: [{ x: 3, y: 256, w: 27, h: 32 }, { x: 34, y: 256, w: 29, h: 32 }, { x: 69, y: 256, w: 27, h: 32 }, { x: 104, y: 256, w: 25, h: 32 }, { x: 135, y: 256, w: 27, h: 32 }, { x: 166, y: 256, w: 29, h: 32 }, { x: 201, y: 256, w: 27, h: 32 }, { x: 236, y: 256, w: 25, h: 32 }] },
-  10: { name: "Run", fps: 7, loop: false, frames: [{ x: 0, y: 288, w: 30, h: 32 }, { x: 36, y: 288, w: 27, h: 32 }, { x: 71, y: 288, w: 25, h: 32 }, { x: 104, y: 288, w: 25, h: 32 }] },
-  11: { name: "Prepare Stealth", fps: 7, loop: false, frames: [{ x: 5, y: 320, w: 25, h: 32 }, { x: 33, y: 320, w: 30, h: 32 }, { x: 69, y: 320, w: 27, h: 32 }] },
-  12: { name: "Stealth", fps: 5, loop: true, frames: [{ x: 3, y: 352, w: 27, h: 32 }, { x: 36, y: 352, w: 27, h: 32 }, { x: 70, y: 352, w: 26, h: 32 }, { x: 102, y: 352, w: 27, h: 32 }, { x: 135, y: 352, w: 27, h: 32 }, { x: 168, y: 352, w: 27, h: 32 }, { x: 202, y: 352, w: 26, h: 32 }] },
-  13: { name: "Cancel Stealth", fps: 7, loop: false, frames: [{ x: 3, y: 384, w: 27, h: 32 }, { x: 33, y: 384, w: 30, h: 32 }, { x: 71, y: 384, w: 25, h: 32 }] },
-  14: { name: "Jump", fps: 7, loop: false, frames: [{ x: 5, y: 416, w: 25, h: 32 }, { x: 36, y: 416, w: 27, h: 32 }, { x: 71, y: 416, w: 25, h: 32 }, { x: 102, y: 416, w: 27, h: 32 }, { x: 137, y: 416, w: 25, h: 32 }, { x: 168, y: 416, w: 27, h: 32 }, { x: 198, y: 416, w: 30, h: 32 }] },
-  15: { name: "Attack", fps: 7, loop: false, frames: [{ x: 5, y: 448, w: 25, h: 32 }, { x: 39, y: 448, w: 22, h: 32 }, { x: 73, y: 448, w: 20, h: 32 }, { x: 107, y: 448, w: 22, h: 32 }, { x: 140, y: 448, w: 21, h: 32 }, { x: 173, y: 448, w: 21, h: 32 }, { x: 206, y: 448, w: 21, h: 32 }, { x: 239, y: 448, w: 24, h: 32 }, { x: 272, y: 448, w: 21, h: 32 }, { x: 305, y: 448, w: 22, h: 32 }, { x: 337, y: 448, w: 20, h: 32 }, { x: 369, y: 448, w: 22, h: 32 }, { x: 401, y: 448, w: 25, h: 32 }] },
-  16: { name: "Loop Attack", fps: 7, loop: true, frames: [{ x: 8, y: 480, w: 22, h: 32 }, { x: 41, y: 480, w: 21, h: 32 }, { x: 74, y: 480, w: 21, h: 32 }, { x: 107, y: 480, w: 21, h: 32 }, { x: 140, y: 480, w: 21, h: 32 }, { x: 173, y: 480, w: 24, h: 32 }] },
-  17: { name: "Jump in to the Box", fps: 7, loop: false, frames: [{ x: 4, y: 512, w: 26, h: 32 }, { x: 35, y: 512, w: 28, h: 32 }, { x: 70, y: 512, w: 26, h: 32 }, { x: 101, y: 512, w: 29, h: 32 }, { x: 133, y: 512, w: 30, h: 32 }, { x: 165, y: 512, w: 32, h: 32 }, { x: 198, y: 512, w: 32, h: 32 }, { x: 234, y: 512, w: 29, h: 32 }] },
-  18: { name: "Push Hand Up", fps: 7, loop: false, frames: [{ x: 3, y: 544, w: 29, h: 32 }, { x: 36, y: 544, w: 29, h: 32 }, { x: 69, y: 544, w: 29, h: 32 }] },
-  19: { name: "Play Box", fps: 7, loop: false, frames: [{ x: 3, y: 576, w: 29, h: 32 }, { x: 36, y: 576, w: 29, h: 32 }, { x: 69, y: 576, w: 29, h: 32 }, { x: 102, y: 576, w: 29, h: 32 }, { x: 135, y: 576, w: 29, h: 32 }] },
-  20: { name: "Push Hand Down", fps: 7, loop: false, frames: [{ x: 3, y: 608, w: 29, h: 32 }, { x: 36, y: 608, w: 29, h: 32 }, { x: 69, y: 608, w: 29, h: 32 }] },
-  21: { name: "Ear Up", fps: 6, loop: false, frames: [{ x: 4, y: 640, w: 29, h: 32 }, { x: 37, y: 640, w: 29, h: 32 }] },
-  22: { name: "Scan", fps: 6, loop: false, frames: [{ x: 4, y: 672, w: 29, h: 32 }, { x: 37, y: 672, w: 29, h: 32 }, { x: 70, y: 672, w: 29, h: 32 }, { x: 103, y: 672, w: 29, h: 32 }] },
-  23: { name: "Ear Down", fps: 6, loop: false, frames: [{ x: 4, y: 704, w: 29, h: 32 }, { x: 37, y: 704, w: 29, h: 32 }] },
-  24: { name: "Jump out of the Box", fps: 7, loop: false, frames: [{ x: 4, y: 736, w: 29, h: 30 }, { x: 37, y: 736, w: 29, h: 30 }, { x: 69, y: 736, w: 29, h: 30 }, { x: 102, y: 736, w: 27, h: 30 }, { x: 137, y: 736, w: 25, h: 30 }, { x: 168, y: 736, w: 27, h: 30 }, { x: 203, y: 736, w: 25, h: 30 }] },
+/** 组装单个动作定义：同时算好前缀和 */
+function def(row: number, cols: number, loop: boolean, durations: number[]): AnimationDef {
+  const cum = [0];
+  for (const d of durations) cum.push(cum[cum.length - 1] + d);
+  return { row, cols, loop, durations, cum };
+}
+
+/** 9 个标准动作（行 0–8）。时长表来自契约原文：
+ *  idle 280,110,110,140,140,320；running-right/left 120×7+末帧 220；waving 140×3+280；
+ *  jumping 140×4+280；failed 140×7+240；waiting 150×5+260；running 120×5+220；review 150×5+280 */
+export const ANIMATIONS: Record<PetAnim, AnimationDef> = {
+  idle: def(0, 6, true, [280, 110, 110, 140, 140, 320]),
+  "running-right": def(1, 8, true, [120, 120, 120, 120, 120, 120, 120, 220]),
+  "running-left": def(2, 8, true, [120, 120, 120, 120, 120, 120, 120, 220]),
+  waving: def(3, 4, false, [140, 140, 140, 280]),
+  jumping: def(4, 5, false, [140, 140, 140, 140, 280]),
+  failed: def(5, 8, false, [140, 140, 140, 140, 140, 140, 140, 240]),
+  waiting: def(6, 6, true, [150, 150, 150, 150, 150, 260]),
+  running: def(7, 6, true, [120, 120, 120, 120, 120, 220]),
+  review: def(8, 6, true, [150, 150, 150, 150, 150, 280]),
 };
+
+/** v2 环视：16 向静态姿势，22.5° 顺时针一格（行 9 = 000°–157.5°，行 10 = 180°–337.5°；
+ *  000° = 正上方，正前方是死区回落 idle——CodexPetContract） */
+export const LOOK_DIRECTIONS = 16;
+
+/** 环视序号（0–15，顺时针、0 = 正上方）→ 图集格坐标 */
+export function lookCell(idx: number): { row: number; col: number } {
+  return { row: 9 + Math.floor(idx / GRID_COLS), col: idx % GRID_COLS };
+}

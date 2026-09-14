@@ -1,30 +1,30 @@
 <script setup lang="ts">
 /**
- * 桌宠帧渲染器（工单 08）：单张 sprite sheet 用 background-position 切帧。
- * 关键约束：
- * - 底部锚定：帧矩形含整行高（32px），行底即地面线——蹲/坐/站/睡都踩同一条线（用户验收要求）
- * - 像素锐利：整数倍缩放（SHEET_SCALE=2）+ image-rendering: pixelated
- * - 水平翻转：scaleX(-1) 镜像（素材朝右，朝左移动时用）
- * - 摆放微调：帧级 ox/oy（素材像素）叠加在锚定之上；translate 写在 scaleX 之前，
- *   偏移方向是屏幕空间（翻转不镜像偏移方向），正 = 右 / 下
- * - 硬切衔接（工单 09）：fadeSignal 计数变化时快速淡出→淡入一次，掩盖抢占产生的帧跳变
- * 水平居中与地面线定位由外层容器负责（flex 底对齐）。
+ * 桌宠帧渲染器（工单 08 建立、16 改 codex 契约网格）：单张雪碧图按固定 8 列网格
+ * 用 background-position 切帧——格 192×208、÷2 整数缩放（96×104，像素干净），
+ * 每帧同尺寸同基线（契约保证，Oreo 的底部锚定/摆放微调不再需要）。
+ * 形象 = sheet prop（skins.ts 注册表 URL），换装 = 换 URL，引擎状态不动。
+ * look prop（0–15）= v2 环视静态姿势，非空时覆盖 anim/frame（工单 21）。
+ * 硬切衔接（工单 09）：fadeSignal 计数变化时快速淡出→淡入一次，掩盖抢占产生的帧跳变。
  */
 import { computed, ref, watch } from "vue";
-import { ANIMATIONS, PET_SHEET_URL, SHEET_SCALE, SHEET_WIDTH } from "../lib/pet/animations";
-
-/** 帧摆放微调（调试页实时预览用；缺省回落到帧清单里的持久值） */
-export interface SpriteNudge {
-  ox: number;
-  oy: number;
-}
+import {
+  ANIMATIONS,
+  CELL_H,
+  CELL_W,
+  GRID_COLS,
+  lookCell,
+  SHEET_SCALE,
+  type PetAnim,
+} from "../lib/pet/animations";
 
 const props = defineProps<{
-  /** 动画编号（作者标注体系，见 animations.ts） */
-  anim: number;
+  anim: PetAnim;
   frame: number;
-  flip?: boolean;
-  nudge?: SpriteNudge;
+  /** 雪碧图 URL（形象皮肤） */
+  sheet: string;
+  /** v2 环视姿势序号（0–15，顺时针、0 = 正上方）；非空时覆盖 anim/frame */
+  look?: number | null;
   /** 硬切淡出淡入信号（引擎 flick 计数，仅变化时触发一次动画） */
   fadeSignal?: number;
 }>();
@@ -41,33 +41,21 @@ watch(
   },
 );
 
-const rect = computed(() => {
+/** 当前帧的格坐标：环视姿势覆盖标准动作帧 */
+const cell = computed(() => {
+  if (props.look != null) return lookCell(props.look);
   const def = ANIMATIONS[props.anim];
-  if (!def) return null;
-  return def.frames[Math.min(props.frame, def.frames.length - 1)] ?? def.frames[0];
+  return { row: def.row, col: Math.min(props.frame, def.cols - 1) };
 });
 
-const style = computed(() => {
-  const r = rect.value;
-  if (!r) return { display: "none" };
-  const ox = props.nudge?.ox ?? r.ox ?? 0;
-  const oy = props.nudge?.oy ?? r.oy ?? 0;
-  const transform = [
-    ox || oy ? `translate(${ox * SHEET_SCALE}px, ${oy * SHEET_SCALE}px)` : "",
-    props.flip ? "scaleX(-1)" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return {
-    width: `${r.w * SHEET_SCALE}px`,
-    height: `${r.h * SHEET_SCALE}px`,
-    backgroundImage: `url(${PET_SHEET_URL})`,
-    backgroundSize: `${SHEET_WIDTH * SHEET_SCALE}px auto`,
-    backgroundPosition: `${-r.x * SHEET_SCALE}px ${-r.y * SHEET_SCALE}px`,
-    transform: transform || undefined,
-    imageRendering: "pixelated" as const,
-  };
-});
+const style = computed(() => ({
+  width: `${CELL_W * SHEET_SCALE}px`,
+  height: `${CELL_H * SHEET_SCALE}px`,
+  backgroundImage: `url(${props.sheet})`,
+  backgroundSize: `${GRID_COLS * CELL_W * SHEET_SCALE}px auto`,
+  backgroundPosition: `${-cell.value.col * CELL_W * SHEET_SCALE}px ${-cell.value.row * CELL_H * SHEET_SCALE}px`,
+  imageRendering: "pixelated" as const,
+}));
 </script>
 
 <template>
@@ -76,8 +64,8 @@ const style = computed(() => {
 
 <style scoped>
 .pet-sprite {
-  flex: none; /* 不被 flex 容器压缩，帧宽随动画逐帧变化 */
-  will-change: background-position, transform;
+  flex: none;
+  will-change: background-position;
 }
 
 /* 无法衔接的硬切（引擎 flick）：快速淡出→淡入避免跳变 */

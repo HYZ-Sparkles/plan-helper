@@ -1,61 +1,53 @@
 <script setup lang="ts">
 /**
- * 桌宠动画调试页（工单 08，dev-only）：浏览器直开 http://localhost:1420/#/dev/anim。
+ * 桌宠动画调试页（工单 08 建立、16 改 codex 契约词汇表，dev-only）：
+ * 浏览器直开 http://localhost:1420/#/dev/anim。
  * 用途：
- * - 帧清单回放终审：若某帧出现"半只猫/两只猫粘连"说明切帧有误，改 scripts 规则重生成
- * - 节奏调参：fps 无资源元数据，在此试拍后把合意值写进 scripts/gen-pet-frames.mjs 的 META
- * - 位移验证：模拟 mover 驱动 64×64 小窗在假想屏幕内滑动，看方向判断与边界钳制
+ * - 契约回放终审：逐动作逐帧平铺（9 标准动作 + v2 环视 16 姿势），每帧时长可查
+ * - 形象核对：9 个皮肤任选（v1/v2 标注），网格同构换装
+ * - 位移验证：模拟 mover 驱动 96×104 小窗在假想屏幕内滑动，看方向判断与边界钳制
+ * 契约时长硬性规定（animations.ts），无试拍调参管线（Oreo 的 NUDGE/帧序/权重已移除）。
  * 手动步进与引擎播放互斥（引擎 stop 后手动步进）。
  */
 import { computed, reactive, ref, watch } from "vue";
 import PetSprite from "../components/PetSprite.vue";
-import { ANIMATIONS, type FrameRect } from "../lib/pet/animations";
-import { PetEngine, type EngineState, type PetMover, type StepSpec } from "../lib/pet/engine";
-import {
-  PhArrowCounterClockwise,
-  PhArrowLeft,
-  PhArrowRight,
-  PhCaretDown,
-  PhCaretLeft,
-  PhCaretRight,
-  PhCaretUp,
-  PhMinus,
-  PhPlus,
-} from "@phosphor-icons/vue";
+import { ANIMATIONS, LOOK_DIRECTIONS, PET_WIN, type PetAnim } from "../lib/pet/animations";
+import { SKINS, DEFAULT_SKIN } from "../lib/pet/skins";
+import { PetEngine, type EngineState, type PetMover } from "../lib/pet/engine";
+import { PhCaretLeft, PhCaretRight } from "@phosphor-icons/vue";
 
-/** 假想屏幕：480×220，64×64 的桌宠窗口可横向滑动 */
-const SIM_AREA = { width: 480, height: 220 };
-const SIM_WIN = 64;
+/** 假想屏幕：640×300，96×104 的桌宠窗口可横向滑动 */
+const SIM_AREA = { width: 640, height: 300 };
+const SIM_WIN = PET_WIN;
 
-const sel = ref(7);
+const skinSlug = ref(DEFAULT_SKIN.slug);
+const skin = computed(() => SKINS.find((s) => s.slug === skinSlug.value) ?? DEFAULT_SKIN);
+
+const animKeys = Object.keys(ANIMATIONS) as PetAnim[];
+const sel = ref<PetAnim>("idle");
 const def = computed(() => ANIMATIONS[sel.value]);
-const fps = ref(def.value.fps);
-const flip = ref(false);
-const loop = ref(def.value.loop);
-const zoom = ref(1); // 1/2/4 → 实际 2×/4×/8×
-watch(sel, () => {
-  fps.value = def.value.fps;
-  loop.value = def.value.loop;
-  stepFrame(0);
-  stop();
-});
+const lookSel = ref<number | null>(null); // 非空 = 平铺选中环视姿势（覆盖动作区）
+const showLook = computed(() => skin.value.spriteVersion === 2);
+
+/** 帧累计时间轴读数（如 "0 / 280 / 390 ms"）：契约时长可查 */
+const timeline = computed(() => def.value.cum.slice(0, -1));
 
 /** 手动帧状态（引擎停止时生效） */
-const manual = reactive({ anim: 7, frame: 0, flip: false });
+const manual = reactive<{ anim: PetAnim; frame: number }>({ anim: "idle", frame: 0 });
 const playing = ref(false);
-const engineState = reactive<EngineState>({ anim: 0, frame: 0, flip: false, locked: false, busy: false, flick: 0 });
+const engineState = reactive<EngineState>({ anim: "idle", frame: 0, locked: false, busy: false, flick: 0 });
 
 /** 模拟 mover：预览盒位置用 ref 暴露给模板 */
-const simPos = ref({ x: (SIM_AREA.width - SIM_WIN) / 2, y: SIM_AREA.height - SIM_WIN - 24 });
+const simPos = ref({ x: (SIM_AREA.width - SIM_WIN.width) / 2, y: SIM_AREA.height - SIM_WIN.height - 24 });
 const simMover: PetMover = {
   position: () => ({ ...simPos.value }),
-  size: () => ({ width: SIM_WIN, height: SIM_WIN }),
+  size: () => ({ width: SIM_WIN.width, height: SIM_WIN.height }),
   workArea: () => ({ x: 0, y: 0, ...SIM_AREA }),
   scaleFactor: () => 1,
   moveTo(x, y) {
     simPos.value = {
-      x: Math.min(Math.max(Math.round(x), 0), SIM_AREA.width - SIM_WIN),
-      y: Math.min(Math.max(Math.round(y), 0), SIM_AREA.height - SIM_WIN),
+      x: Math.min(Math.max(Math.round(x), 0), SIM_AREA.width - SIM_WIN.width),
+      y: Math.min(Math.max(Math.round(y), 0), SIM_AREA.height - SIM_WIN.height),
     };
   },
 };
@@ -63,28 +55,25 @@ const simMover: PetMover = {
 const engine = new PetEngine(simMover);
 engine.subscribe((s) => Object.assign(engineState, s));
 
-/** 引擎正在播的步（fps/flip 引用同对象，滑杆实时生效） */
-let liveStep: StepSpec | null = null;
-watch(fps, (v) => {
-  if (liveStep) liveStep.fps = v;
-});
-watch(flip, (v) => {
-  if (liveStep) liveStep.flip = v;
-});
+const view = computed(() =>
+  playing.value && lookSel.value == null ? engineState : { ...manual },
+);
 
-const view = computed(() => (playing.value ? engineState : { ...manual }));
+watch(sel, () => stepFrame(0));
 
-/** 播放当前动画（引擎计时 + 位移） */
+/** 播放当前动作（引擎计时 + 位移） */
 function play(move = false) {
-  liveStep = {
-    anim: sel.value,
-    loop: loop.value,
-    fps: fps.value,
-    flip: flip.value,
-    movement: move ? { distance: moveDistance.value, direction: moveDir.value } : undefined,
-  };
-  simPos.value = { x: (SIM_AREA.width - SIM_WIN) / 2, y: SIM_AREA.height - SIM_WIN - 24 };
-  engine.request({ lock: false, steps: [liveStep] });
+  lookSel.value = null;
+  simPos.value = { x: (SIM_AREA.width - SIM_WIN.width) / 2, y: SIM_AREA.height - SIM_WIN.height - 24 };
+  engine.request({
+    lock: false,
+    steps: [
+      {
+        anim: sel.value,
+        movement: move ? { distance: moveDistance.value, direction: moveDir.value } : undefined,
+      },
+    ],
+  });
   playing.value = true;
 }
 
@@ -92,213 +81,112 @@ function stop() {
   if (!playing.value) return;
   manual.anim = engineState.anim;
   manual.frame = engineState.frame;
-  manual.flip = engineState.flip;
   engine.stop();
   playing.value = false;
 }
 
 /** 逐帧步进（暂停态） */
 function stepFrame(delta: number) {
-  const n = def.value.frames.length;
+  stop();
   manual.anim = sel.value;
-  manual.frame = ((manual.anim === sel.value ? manual.frame : 0) + delta + n) % n;
-  manual.flip = flip.value;
+  manual.frame = (manual.frame + delta + def.value.cols) % def.value.cols;
+  lookSel.value = null;
+}
+
+/** 平铺格点选：单看某帧 */
+function showFrame(f: number) {
+  stop();
+  manual.anim = sel.value;
+  manual.frame = f;
+  lookSel.value = null;
+}
+
+/** 环视姿势点选：单看某方向（静态姿势，不走引擎） */
+function showLookPose(d: number) {
+  stop();
+  lookSel.value = d;
 }
 
 const moveDistance = ref(200);
 const moveDir = ref<"auto" | "left" | "right">("auto");
 
-/* ---- 帧序 / 位移权重 / 摆放微调（验收机制）----
- * 三张草稿都只在本页生效（同 fps 滑杆不持久化）；落盘 = 页底草稿粘进生成脚本对应表重跑。
- * 帧序与权重直接改写 def（引擎每 tick 取 def，播放中立即可见）；微调走 nudge prop。 */
-
-/** 摆放微调草稿：anim → (0-based 播放位) → {ox, oy}（素材像素，正 = 右 / 下） */
-const nudges = ref<Record<number, Record<number, { ox: number; oy: number }>>>({});
-
-/** 帧序草稿：anim → 播放顺序（元素 = 素材从左数第几帧，1-based）；缺省 = 素材原序 */
-const orders = ref<Record<number, number[]>>({});
-
-/** 权重草稿：anim → 素材帧号(1-based) → 位移权重（默认 1，按素材帧号存——换序时权重跟着帧走） */
-const weights = ref<Record<number, Record<number, number>>>({});
-
-/** 首次改动某动画时快照素材原始帧序（重排与复位的基准） */
-const origFrames = new Map<number, FrameRect[]>();
-
-const nudgeOf = (anim: number, frame: number) => nudges.value[anim]?.[frame];
-
-/** 当前播放位序列（元素 = 素材帧号 1-based）：平铺格即按此序排布 */
-const matSeqOf = (anim: number): number[] =>
-  orders.value[anim] ?? ANIMATIONS[anim].frames.map((_, i) => i + 1);
-
-function nudge(anim: number, frame: number, dx: number, dy: number) {
-  const per = (nudges.value[anim] ??= {});
-  const cur = per[frame] ?? { ox: 0, oy: 0 };
-  per[frame] = { ox: cur.ox + dx, oy: cur.oy + dy };
-}
-
-/** 权重按当前播放序写入 def.moveWeights（引擎取步时读取；全默认不注入） */
-function applyWeights(anim: number) {
-  const per = weights.value[anim];
-  const arr = per && Object.keys(per).length ? matSeqOf(anim).map((m) => per[m] ?? 1) : null;
-  ANIMATIONS[anim].moveWeights = arr && arr.some((v) => v !== 1) ? arr : undefined;
-}
-
-/** 重排 def.frames（切分矩形不动只换序）并按新序重挂权重数组 */
-function applyOrder(anim: number) {
-  const orig = origFrames.get(anim)!;
-  ANIMATIONS[anim].frames = orders.value[anim].map((i) => orig[i - 1]);
-  applyWeights(anim);
-}
-
-function moveFrame(anim: number, pos: number, d: -1 | 1) {
-  const seq = [...matSeqOf(anim)];
-  const t = pos + d;
-  if (t < 0 || t >= seq.length) return;
-  if (!origFrames.has(anim)) origFrames.set(anim, [...ANIMATIONS[anim].frames]);
-  [seq[pos], seq[t]] = [seq[t], seq[pos]];
-  orders.value[anim] = seq;
-  applyOrder(anim);
-}
-
-function resetOrder(anim: number) {
-  const orig = origFrames.get(anim);
-  if (!orig) return;
-  ANIMATIONS[anim].frames = [...orig];
-  delete orders.value[anim];
-  applyWeights(anim);
-}
-
-const weightOf = (anim: number, mat: number) => weights.value[anim]?.[mat] ?? 1;
-
-function bumpWeight(anim: number, mat: number, d: number) {
-  const per = (weights.value[anim] ??= {});
-  const v = Math.max(0, (per[mat] ?? 1) + d);
-  if (v === 1) delete per[mat];
-  else per[mat] = v;
-  if (!Object.keys(per).length) delete weights.value[anim];
-  applyWeights(anim);
-}
-
-function resetWeights(anim: number) {
-  delete weights.value[anim];
-  applyWeights(anim);
-}
-
-/** 本帧恢复默认（摆放微调 + 权重；帧序是队列级操作，整条恢复用「恢复原序」） */
-function resetFrame(anim: number, pos: number, mat: number) {
-  if (nudges.value[anim]) delete nudges.value[anim][pos];
-  if (weights.value[anim]) {
-    delete weights.value[anim][mat];
-    if (!Object.keys(weights.value[anim]).length) delete weights.value[anim];
-  }
-  applyWeights(anim);
-}
-
-/** 清空草稿并还原本页对 ANIMATIONS 的一切临时改动 */
-function clearDraft() {
-  const anims = new Set([...origFrames.keys(), ...Object.keys(weights.value).map(Number)]);
-  for (const a of anims) {
-    if (origFrames.has(a)) ANIMATIONS[a].frames = [...origFrames.get(a)!];
-    ANIMATIONS[a].moveWeights = undefined;
-  }
-  orders.value = {};
-  weights.value = {};
-  nudges.value = {};
-}
-
-/** 微调读数文案（如 "x+1 y-2"，全 0 省略） */
-const signed = (v: number) => (v > 0 ? `+${v}` : `${v}`);
-const nudgeLabel = (n?: { ox: number; oy: number }) =>
-  !n || (!n.ox && !n.oy) ? "" : `x${signed(n.ox)} y${signed(n.oy)}`;
-
-/** 草稿 → 可直接粘进 scripts/gen-pet-frames.mjs 的片段（帧号/位次 1-based，同平铺显示） */
-const draftSnippet = computed(() => {
-  const orderLines: string[] = [];
-  for (const [a, seq] of Object.entries(orders.value))
-    if (seq.some((m, i) => m !== i + 1)) orderLines.push(`  ${a}: [${seq.join(", ")}],`);
-  const weightLines: string[] = [];
-  for (const [a, per] of Object.entries(weights.value)) {
-    const arr = matSeqOf(+a).map((m) => per[m] ?? 1);
-    if (arr.some((v) => v !== 1)) weightLines.push(`  ${a}: [${arr.join(", ")}],`);
-  }
-  const nudgeLines: string[] = [];
-  for (const [a, per] of Object.entries(nudges.value)) {
-    const frames = Object.entries(per)
-      .filter(([, v]) => v.ox || v.oy)
-      .map(([f, v]) => `    ${Number(f) + 1}: [${v.ox}, ${v.oy}],`)
-      .join("\n");
-    if (frames) nudgeLines.push(`  ${a}: {\n${frames}\n  },`);
-  }
-  return [
-    orderLines.length && `const FRAME_ORDER = {\n${orderLines.join("\n")}\n};`,
-    weightLines.length && `const MOVE_WEIGHTS = {\n${weightLines.join("\n")}\n};`,
-    nudgeLines.length && `const NUDGE = {\n${nudgeLines.join("\n")}\n};`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-});
-
-async function copySnippet() {
-  await navigator.clipboard.writeText(draftSnippet.value);
-}
+/** 动作行的中文名（调试页速查；语义详注在 animations.ts / ADR-0010） */
+const ANIM_LABELS: Record<PetAnim, string> = {
+  idle: "待机（休息常驻）",
+  "running-right": "向右跑（拖拽反馈/自主移动）",
+  "running-left": "向左跑（拖拽反馈/自主移动）",
+  waving: "挥手（启动）",
+  jumping: "跳跃（随机/庆祝/拖起）",
+  failed: "失败（总结未达标）",
+  waiting: "等待（大面板打开）",
+  running: "奔跑（工作常驻）",
+  review: "审查（推进汇报反馈）",
+};
 </script>
 
 <template>
   <div class="page">
     <header class="bar">
       <h1>桌宠动画调试</h1>
-      <span class="hint">帧有残缺/粘连 → 改 scripts/gen-pet-frames.mjs 重生成；fps 合意 → 写回 META</span>
+      <span class="hint">codex 契约：8 列网格、逐帧时长硬性规定；帧残缺 = 形象资产问题</span>
     </header>
 
     <div class="layout">
       <aside class="list">
+        <label class="skin-pick">
+          形象
+          <select v-model="skinSlug">
+            <option v-for="s in SKINS" :key="s.slug" :value="s.slug">
+              {{ s.name }}（v{{ s.spriteVersion }}）
+            </option>
+          </select>
+        </label>
         <button
-          v-for="(d, n) in ANIMATIONS"
-          :key="n"
+          v-for="k in animKeys"
+          :key="k"
           class="item"
-          :class="{ active: sel === +n }"
-          @click="sel = +n"
+          :class="{ active: sel === k }"
+          @click="sel = k"
         >
-          <b>{{ n }}</b> {{ d.name }}
-          <i>{{ d.frames.length }}f</i>
+          <b>{{ ANIMATIONS[k].row }}</b> {{ k }}
+          <i>{{ ANIMATIONS[k].cols }}f</i>
         </button>
       </aside>
 
       <section class="main">
-        <!-- 舞台：地面线 + 居中猫（zoom 时 transform 缩放，底部锚定不变） -->
+        <!-- 舞台：地面线 + 居中形象 -->
         <div class="stage-wrap">
-          <div class="stage" :style="{ transform: `scale(${zoom})`, transformOrigin: 'bottom center' }">
+          <div class="stage">
             <div class="ground" />
-            <PetSprite :anim="view.anim" :frame="view.frame" :flip="view.flip" :nudge="nudgeOf(view.anim, view.frame)" />
+            <PetSprite
+              :anim="view.anim"
+              :frame="view.frame"
+              :sheet="skin.sheet"
+              :look="lookSel"
+            />
           </div>
         </div>
 
-        <!-- 位移预览：假想屏幕 + 64×64 窗口盒 -->
+        <!-- 位移预览：假想屏幕 + 96×104 窗口盒 -->
         <div class="sim" :style="{ width: SIM_AREA.width + 'px', height: SIM_AREA.height + 'px' }">
-          <div class="sim-win" :style="{ transform: `translateX(${simPos.x - (SIM_AREA.width - SIM_WIN) / 2}px)` }">
-            <PetSprite :anim="view.anim" :frame="view.frame" :flip="view.flip" :nudge="nudgeOf(view.anim, view.frame)" />
+          <div
+            class="sim-win"
+            :style="{ transform: `translateX(${simPos.x - (SIM_AREA.width - SIM_WIN.width) / 2}px)` }"
+          >
+            <PetSprite :anim="view.anim" :frame="view.frame" :sheet="skin.sheet" :look="lookSel" />
           </div>
           <span class="sim-label">模拟屏幕（位移方向/边界钳制预览）</span>
         </div>
 
         <div class="controls">
           <button class="ghost-btn" @click="playing ? stop() : play()">{{ playing ? "暂停" : "播放" }}</button>
-          <button class="ghost-btn" :disabled="playing" @click="stepFrame(-1)" title="上一帧">
+          <button class="ghost-btn" :disabled="playing || lookSel != null" @click="stepFrame(-1)" title="上一帧">
             <PhCaretLeft :size="14" /> 帧
           </button>
-          <button class="ghost-btn" :disabled="playing" @click="stepFrame(1)" title="下一帧">
+          <button class="ghost-btn" :disabled="playing || lookSel != null" @click="stepFrame(1)" title="下一帧">
             帧 <PhCaretRight :size="14" />
           </button>
-          <label class="ctl">fps <input v-model.number="fps" type="range" min="1" max="24" /> {{ fps }}</label>
-          <label class="ctl"><input v-model="loop" type="checkbox" /> 循环</label>
-          <label class="ctl"><input v-model="flip" type="checkbox" /> 翻转</label>
-          <label class="ctl">缩放
-            <select v-model.number="zoom">
-              <option :value="1">2×</option>
-              <option :value="2">4×</option>
-              <option :value="4">8×</option>
-            </select>
-          </label>
+          <span class="meta">{{ ANIM_LABELS[sel] }}</span>
           <label class="ctl">位移 <input v-model.number="moveDistance" type="number" min="10" max="400" style="width: 64px" /> px</label>
           <select v-model="moveDir">
             <option value="auto">auto</option>
@@ -306,47 +194,39 @@ async function copySnippet() {
             <option value="right">right</option>
           </select>
           <button class="primary-btn" @click="play(true)">带位移播放</button>
-          <button v-if="orders[sel]" class="ghost-btn" @click="resetOrder(sel)">恢复原序</button>
-          <button v-if="weights[sel]" class="ghost-btn" @click="resetWeights(sel)">权重归一</button>
         </div>
 
-        <!-- 全帧平铺：切帧终审 + 逐帧调整（上排 ◁▷ 播放位 / −+ 位移权重，下排 ◀▲▼▶ 摆放微调；草稿页底导出） -->
-        <div class="strip" :style="{ transform: `scale(${zoom})`, transformOrigin: 'top left' }">
-          <div v-for="(mat, pos) in matSeqOf(sel)" :key="mat" class="strip-cell" :class="{ cur: view.frame === pos }">
-            <PetSprite :anim="sel" :frame="pos" :flip="flip" :nudge="nudgeOf(sel, pos)" />
-            <div class="nudge-ctl" :title="`播放位 ${pos + 1}（素材第 ${mat} 帧）`">
-              <button :disabled="pos === 0" @click="moveFrame(sel, pos, -1)" title="播放位前移"><PhArrowLeft :size="10" /></button>
-              <button :disabled="pos === matSeqOf(sel).length - 1" @click="moveFrame(sel, pos, 1)" title="播放位后移"><PhArrowRight :size="10" /></button>
-              <button @click="bumpWeight(sel, mat, -0.5)" title="位移权重 -0.5（每帧行程占比，带位移播放生效）"><PhMinus :size="10" /></button>
-              <span class="w-readout" :class="{ set: weightOf(sel, mat) !== 1 }">{{ weightOf(sel, mat) }}</span>
-              <button @click="bumpWeight(sel, mat, 0.5)" title="位移权重 +0.5（每帧行程占比，带位移播放生效）"><PhPlus :size="10" /></button>
-            </div>
-            <div class="nudge-ctl" :title="`第 ${pos + 1} 帧摆放微调（素材像素）`">
-              <button @click="nudge(sel, pos, -1, 0)" title="左 1px"><PhCaretLeft :size="10" /></button>
-              <button @click="nudge(sel, pos, 0, -1)" title="上 1px"><PhCaretUp :size="10" /></button>
-              <button @click="nudge(sel, pos, 0, 1)" title="下 1px"><PhCaretDown :size="10" /></button>
-              <button @click="nudge(sel, pos, 1, 0)" title="右 1px"><PhCaretRight :size="10" /></button>
-              <button
-                v-if="nudgeLabel(nudgeOf(sel, pos)) || weightOf(sel, mat) !== 1"
-                @click="resetFrame(sel, pos, mat)"
-                title="本帧恢复默认（微调 + 权重）"
-              >
-                <PhArrowCounterClockwise :size="10" />
-              </button>
-            </div>
-            <span class="nudge-readout">{{ nudgeLabel(nudgeOf(sel, pos)) || pos + 1 }}</span>
+        <!-- 逐帧平铺：契约时长读数；点格子单看一帧 -->
+        <div class="strip">
+          <div
+            v-for="f in def.cols"
+            :key="f"
+            class="strip-cell"
+            :class="{ cur: lookSel == null && view.frame === f - 1 }"
+            @click="showFrame(f - 1)"
+          >
+            <PetSprite :anim="sel" :frame="f - 1" :sheet="skin.sheet" />
+            <span class="dur">{{ timeline[f - 1] }}ms</span>
+            <span class="dur muted">+{{ def.durations[f - 1] }}</span>
           </div>
         </div>
 
-        <!-- 调整草稿导出：粘进 scripts/gen-pet-frames.mjs 对应表（FRAME_ORDER / MOVE_WEIGHTS / NUDGE）重跑生成即落盘 -->
-        <div v-if="draftSnippet" class="nudge-export">
-          <div class="nudge-export-head">
-            <span>调整草稿（粘进 scripts/gen-pet-frames.mjs 对应表，重跑 <code>node scripts/gen-pet-frames.mjs</code> 生效）</span>
-            <button class="ghost-btn" @click="copySnippet">复制</button>
-            <button class="ghost-btn" @click="clearDraft">清空草稿</button>
+        <!-- v2 环视 16 姿势（v1 无此行，区段隐藏） -->
+        <template v-if="showLook">
+          <div class="strip">
+            <div
+              v-for="d in LOOK_DIRECTIONS"
+              :key="d"
+              class="strip-cell"
+              :class="{ cur: lookSel === d - 1 }"
+              @click="showLookPose(d - 1)"
+            >
+              <PetSprite :anim="'idle'" :frame="0" :sheet="skin.sheet" :look="d - 1" />
+              <span class="dur">{{ (d - 1) * 22.5 }}°</span>
+            </div>
           </div>
-          <pre>{{ draftSnippet }}</pre>
-        </div>
+        </template>
+        <p v-else class="muted">v1 形象无环视行（16 向视线跟随自动降级，工单 21）</p>
       </section>
     </div>
   </div>
@@ -374,7 +254,7 @@ async function copySnippet() {
 
 .layout {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: 240px 1fr;
   gap: 16px;
   align-items: start;
 }
@@ -388,6 +268,17 @@ async function copySnippet() {
   border: var(--border-default);
   border-radius: var(--radius-md);
   padding: 6px;
+}
+
+.skin-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 10px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  border-bottom: var(--border-default);
+  margin-bottom: 4px;
 }
 
 .item {
@@ -405,7 +296,7 @@ async function copySnippet() {
 }
 
 .item b {
-  color: var(--text-secondary);
+  color: var(--text-muted);
   width: 2ch;
 }
 
@@ -437,8 +328,7 @@ async function copySnippet() {
   align-items: flex-end;
   justify-content: center;
   position: relative;
-  width: 200px;
-  height: 128px;
+  padding: 0 40px;
 }
 
 .ground {
@@ -460,10 +350,8 @@ async function copySnippet() {
 
 .sim-win {
   position: absolute;
-  left: calc(50% - 32px);
+  left: calc(50% - 48px);
   bottom: 24px;
-  width: 64px;
-  height: 64px;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -487,6 +375,11 @@ async function copySnippet() {
   margin-top: 12px;
 }
 
+.meta {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
 .ctl {
   display: inline-flex;
   align-items: center;
@@ -503,7 +396,6 @@ async function copySnippet() {
   border: var(--border-default);
   border-radius: var(--radius-md);
   overflow: auto;
-  transform-origin: top left;
 }
 
 .strip-cell {
@@ -511,6 +403,7 @@ async function copySnippet() {
   flex-direction: column;
   align-items: center;
   gap: 4px;
+  cursor: pointer;
 }
 
 .strip-cell.cur {
@@ -518,77 +411,12 @@ async function copySnippet() {
   outline-offset: 2px;
 }
 
-.strip-cell span {
+.dur {
   font-size: 11px;
-  color: var(--text-muted);
-}
-
-.nudge-ctl {
-  display: flex;
-  gap: 2px;
-}
-
-.nudge-ctl button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 14px;
-  padding: 0;
-  border: var(--border-default);
-  background: var(--surface);
-  color: var(--text-secondary);
-  cursor: pointer;
-}
-
-.nudge-ctl button:hover:not(:disabled) {
-  border-color: var(--border-active);
-  color: var(--text-primary);
-}
-
-.nudge-ctl button:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.w-readout {
-  min-width: 22px;
-  text-align: center;
-  font-size: 10px;
-  line-height: 14px;
-  color: var(--text-muted);
-}
-
-.w-readout.set {
-  color: var(--primary);
-}
-
-.nudge-readout {
-  font-size: 10px;
-  color: var(--primary);
-  min-height: 12px;
-}
-
-.nudge-export {
-  margin-top: 12px;
-  border: var(--border-active);
-  border-radius: var(--radius-sm);
-  padding: 10px 12px;
-  background: var(--bg-accent-group);
-}
-
-.nudge-export-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
   color: var(--text-secondary);
 }
 
-.nudge-export pre {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--text-primary);
-  overflow: auto;
+.muted {
+  color: var(--text-muted);
 }
 </style>

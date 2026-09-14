@@ -1,17 +1,21 @@
 /**
- * 桌宠帧动画引擎（工单 08）：CONTEXT PetActionExecution 的"当前动作锁"模型。
- * 平台无关纯 TS——窗口位移经注入的 PetMover 抽象（PetWindow 注 Tauri 实现、/dev/anim
- * 调试页注模拟实现），方向判断与屏幕边界钳制都在引擎内完成。
+ * 桌宠帧动画引擎（工单 08 建立、16 改 codex 契约步进）：CONTEXT PetActionExecution
+ * 的"当前动作锁"模型。平台无关纯 TS——窗口位移经注入的 PetMover 抽象（PetWindow 注
+ * Tauri 实现、/dev/anim 调试页注模拟实现），方向判断与屏幕边界钳制都在引擎内完成。
  *
- * 锁规则：用户动作（lock:true）播放期间拒绝一切新动作；系统动作（lock:false，如 09 的
- * 随机动作）仅从空闲发起，可被用户动作立即抢占（装饰性动作让路）。
+ * 步进（16 重写）：帧下标由步内单调时长对契约逐帧时长表前缀和查表派生——循环步取模、
+ * 一次性步按 repeats 遍数播完进下一步；不再有 fps / 位移权重（契约硬性规定时长，
+ * Oreo 的试拍调参管线随其素材一起移除）。
+ *
+ * 锁规则：用户动作（lock:true）播放期间拒绝一切新动作；系统动作（lock:false，如随机
+ * 动作、业务里程碑）仅从稳态发起，可被用户动作立即抢占（装饰性动作让路）。
  * README「先播放完才执行新动作」由锁 + 抢占边界共同保障。
  *
- * 工单 09 增补：freeze/unfreeze（拖拽期间保持当前帧不动、松手继续，动画步内部时长
- * 冻结不累积）；"return" 位移方向（回到动作起点，跑去吃饭走回原位用）；flick 计数
- * （抢占硬切的帧不衔接 → 渲染层快速淡出淡入）。
+ * freeze/unfreeze（09 建立）：拖拽/挂起期间保持当前帧不动、步内时长不累积，松手继续。
+ * flick 计数：抢占未稳态动作 = 帧硬切 → 渲染层快速淡出淡入；ActionSpec.flickOnSwap
+ * 让稳态常驻替换也闪一次（模式硬切无过渡动画时的兜底，工单 17）。
  */
-import { ANIMATIONS, type AnimationDef } from "./animations";
+import { ANIMATIONS, type PetAnim } from "./animations";
 import type { MonitorArea } from "./dragBounds";
 
 /** 窗口位移抽象：一律物理像素（与 Tauri outerPosition / monitor.workArea 同口径）。
@@ -31,7 +35,7 @@ export interface PetMover {
 }
 
 /** 动作位移：距离为显示逻辑像素，方向 auto = 朝屏幕余量大的一侧；
- *  "return" = 回到本动作开始时的窗口 x（跑去吃饭→吃→走回原位的回程）。 */
+ *  "return" = 回到本动作开始时的窗口 x（自主移动往返的回程用）。 */
 export type MovementSpec =
   | { direction: "auto" | "left" | "right"; distance: number }
   | { direction: "return" };
@@ -43,32 +47,33 @@ export function autoDirection(posX: number, minX: number, maxX: number): "left" 
 
 /** 序列中的一步（单动画） */
 export interface StepSpec {
-  anim: number;
+  anim: PetAnim;
+  /** 覆盖动作天然循环性（如 review 天然循环、一次性演出截断为有限遍） */
   loop?: boolean;
-  fps?: number;
-  /** 水平翻转（素材朝右，朝左移动时镜像） */
-  flip?: boolean;
+  /** 一次性步的播完遍数（缺省 1；review 业务演出 = 2，见 actions.ts） */
+  repeats?: number;
   movement?: MovementSpec;
 }
 
-/** 一个动作 = 若干步顺序播放，最后一步通常是循环 idle */
+/** 一个动作 = 若干步顺序播放，最后一步通常是循环常驻 */
 export interface ActionSpec {
   steps: StepSpec[];
   /** 用户动作占锁（播放中拒绝新动作）；系统动作可被用户动作抢占 */
   lock: boolean;
+  /** 稳态替换也 flick（模式硬切无过渡动画时的兜底）；缺省只在抢占未稳态时 flick */
+  flickOnSwap?: boolean;
   /** 进入最终稳态时回调：循环末步 = 开始循环那一刻，单次末步 = 播完那一刻。
-   * 启动序列完成、模式过渡完成、再见动画完成都挂这里。 */
+   *  启动序列完成、一次性演出结束都挂这里。 */
   onSettle?: () => void;
 }
 
 /** 引擎对外状态（渲染与 UI 禁用的全部依据） */
 export interface EngineState {
-  anim: number;
+  anim: PetAnim;
   frame: number;
-  flip: boolean;
   locked: boolean;
   busy: boolean;
-  /** 抢占硬切计数：新动作替换了未稳态的旧动作时 +1（同作者帧自然衔接的链不会触发）——
+  /** 抢占硬切计数：新动作替换了未稳态的旧动作时 +1（flickOnSwap 时稳态替换也 +1）——
    *  渲染层据此快速淡出→淡入避免帧跳变（CONTEXT PetActionExecution 流畅性保障） */
   flick: number;
 }
@@ -77,8 +82,6 @@ export interface EngineState {
 interface ResolvedMove {
   startX: number;
   dx: number;
-  /** moveWeights 前缀和（长 = 帧数 + 1，末项 = Σw）；null = 未配权重 → 时间线性 */
-  cumW: number[] | null;
 }
 
 export class PetEngine {
@@ -86,12 +89,9 @@ export class PetEngine {
   private action: ActionSpec | null = null;
   private stepIdx = 0;
   /** 渲染状态持久保留：动作结束后停在最后一帧，编排间隙不闪空 */
-  private anim = 0;
+  private anim: PetAnim = "idle";
   private frame = 0;
-  private flip = false;
-  /** 帧内模累积（advance 后清零）——驱动帧下标 */
-  private acc = 0;
-  /** 当前步的单调时长（ms）——驱动窗口位移插值；不能用 acc，它每帧归零会锯齿 */
+  /** 当前步的单调时长（ms）——帧查表与位移插值共用；不能用会归零的累积量 */
   private stepElapsed = 0;
   private lastT = 0;
   private raf = 0;
@@ -116,9 +116,9 @@ export class PetEngine {
   }
 
   /** 发起动作；被拒时返回 false（UI 据此提示"桌宠正在执行动作"）。
-   * 锁的边界：**过渡中**（settled=false）用户动作拒绝一切、系统动作仅可被用户动作抢占；
-   * **稳态循环**（settled=true，末步 idle 循环开始后）视为"空闲"——任何新动作可直接替换，
-   * 否则启动序列的 7 Stand Idle 会永久占锁，之后一切动作（睡眠过渡/菜单/再见）都被拒。 */
+   *  锁的边界：**过渡中**（settled=false）用户动作拒绝一切、系统动作仅可被用户动作抢占；
+   *  **稳态循环**（settled=true，末步循环开始后）视为"空闲"——任何新动作可直接替换，
+   *  否则启动序列末尾的常驻循环会永久占锁，之后一切动作都被拒。 */
   request(action: ActionSpec): boolean {
     if (action.steps.length === 0) return false;
     if (this.action && !this.settled) {
@@ -132,8 +132,7 @@ export class PetEngine {
     return {
       anim: this.anim,
       frame: this.frame,
-      flip: this.flip,
-      /** 锁只在过渡期持有；末步 idle 循环开始（settled）即释放，菜单恢复可用 */
+      /** 锁只在过渡期持有；末步循环开始（settled）即释放，菜单恢复可用 */
       locked: (this.action?.lock && !this.settled) ?? false,
       busy: this.action != null,
       flick: this.flick,
@@ -161,7 +160,7 @@ export class PetEngine {
     }
   }
 
-  /** 停止当前动作、停在最后一帧（调试页暂停用；编排层的 idle 接管不走这里） */
+  /** 停止当前动作、停在最后一帧（调试页暂停用；编排层的常驻接管不走这里） */
   stop(): void {
     this.action = null;
     this.stopLoop();
@@ -174,8 +173,8 @@ export class PetEngine {
   }
 
   private begin(action: ActionSpec): void {
-    // 抢占未稳态动作 = 帧硬切（同作者链不会走到这），flick 驱动渲染层淡出淡入
-    if (this.action && !this.settled) this.flick++;
+    // 抢占未稳态动作 = 帧硬切，flickOnSwap 让稳态常驻硬切也闪（模式切换无过渡动画）
+    if (this.action && (!this.settled || action.flickOnSwap)) this.flick++;
     this.stopLoop(); // 取消在排 tick：替换运行动作时 rAF 会叠加（08 遗留——轮换/抢占后动画倍速）
     this.frozen = false; // 新动作即播：拖拽冻结不跨动作延续
     if (this.mover) this.actionStartX = this.mover.position().x;
@@ -193,11 +192,9 @@ export class PetEngine {
     const def = ANIMATIONS[step.anim];
     this.anim = step.anim;
     this.frame = 0;
-    this.flip = step.flip ?? false;
-    this.acc = 0;
     this.stepElapsed = 0;
     this.move = this.resolveMove(step);
-    // 循环末步：开始循环即最终稳态（如启动序列末尾进入 Stand Idle）
+    // 循环末步：开始循环即最终稳态（如启动后的常驻循环）
     if (this.stepIdx === action.steps.length - 1 && (step.loop ?? def.loop) && !this.settled) {
       this.settled = true;
       action.onSettle?.();
@@ -223,7 +220,7 @@ export class PetEngine {
     if (spec.direction === "return") {
       const target = Math.min(Math.max(this.actionStartX, this.clampMinX()), this.clampMaxX());
       const dx = target - pos.x;
-      return dx === 0 ? null : { startX: pos.x, dx, cumW: this.cumWeights(step.anim) };
+      return dx === 0 ? null : { startX: pos.x, dx };
     }
     const dir = spec.direction === "auto" ? autoDirection(pos.x, this.clampMinX(), this.clampMaxX()) : spec.direction;
     const dist = spec.distance * (this.mover.scaleFactor?.() ?? 1);
@@ -232,29 +229,22 @@ export class PetEngine {
       this.clampMaxX(),
     );
     const dx = target - pos.x;
-    if (dx === 0) return null;
-    return { startX: pos.x, dx, cumW: this.cumWeights(step.anim) };
+    return dx === 0 ? null : { startX: pos.x, dx };
   }
 
-  /** moveWeights 前缀和（含全 0 防退化：Σw ≤ 0 视为未配置走线性，避免除零） */
-  private cumWeights(anim: number): number[] | null {
-    const w = ANIMATIONS[anim].moveWeights;
-    if (!w) return null;
-    const cumW = [0];
-    for (const v of w) cumW.push(cumW[cumW.length - 1] + v);
-    return cumW[cumW.length - 1] > 0 ? cumW : null;
+  /** 步的有效总时长：循环步 = 一圈；一次性步 = 一圈 × 遍数（位移插值的分母） */
+  private stepDuration(step: StepSpec): number {
+    const def = ANIMATIONS[step.anim];
+    const one = def.cum[def.cols];
+    const loop = step.loop ?? def.loop;
+    return loop ? one : one * (step.repeats ?? 1);
   }
 
-  /** 位移进度 [0,1]：未配权重 = 时间线性；配了 = 按"帧内时间 × 权重"分段采样，
-   *  第 i 帧期间走过的距离占比 = w[i]/Σw（Run 跨步快/收腿慢、Jump 蓄力缓/腾空疾靠它表达） */
-  private moveProgress(def: AnimationDef, fps: number): number {
-    const frameMs = 1000 / fps;
-    const ef = Math.min(this.stepElapsed / frameMs, def.frames.length); // 已过帧时间（含小数）
-    const w = this.move!.cumW;
-    if (!w) return ef / def.frames.length;
-    const i = Math.floor(ef);
-    if (i >= w.length - 1) return 1;
-    return (w[i] + (ef - i) * (w[i + 1] - w[i])) / w[w.length - 1];
+  /** 帧下标查表：t 落进 durations 前缀和的第几格；一次性步播完 reps 遍返回 done */
+  private frameIndex(def: (typeof ANIMATIONS)[PetAnim], t: number): number {
+    let i = 0;
+    while (i < def.cols && def.cum[i + 1] <= t) i++;
+    return i;
   }
 
   private tick = (t: number): void => {
@@ -270,31 +260,26 @@ export class PetEngine {
     }
     const step = action.steps[this.stepIdx];
     const def = ANIMATIONS[step.anim];
-    const fps = step.fps ?? def.fps;
+    const loop = step.loop ?? def.loop;
+    const reps = step.repeats ?? 1;
 
-    // 窗口位移按单调时长插值（比帧率平滑）；目标已在 resolveMove 钳进工作区
+    // 窗口位移按单调时长线性插值（比帧率平滑）；目标已在 resolveMove 钳进工作区
     if (this.move && this.mover) {
-      const progress = this.moveProgress(def, fps);
+      const progress = Math.min(this.stepElapsed / this.stepDuration(step), 1);
       this.mover.moveTo(this.move.startX + this.move.dx * progress, this.mover.position().y);
     }
 
-    this.acc += dt;
     this.stepElapsed += dt;
-    const frameMs = 1000 / fps;
-    const adv = Math.floor(this.acc / frameMs);
-    if (adv > 0) {
-      this.acc -= adv * frameMs;
-      const next = this.frame + adv;
-      if (step.loop ?? def.loop) {
-        this.frame = next % def.frames.length;
-        this.emit();
-      } else if (next < def.frames.length) {
-        this.frame = next;
-        this.emit();
-      } else {
-        this.advanceStep();
-        return; // advanceStep 内部负责续排 rAF（末步完成则不续）
-      }
+    if (!loop && this.stepElapsed >= def.cum[def.cols] * reps) {
+      this.advanceStep();
+      return; // advanceStep 内部负责续排 rAF（末步完成则不续）
+    }
+    // 帧下标从步内时长派生：循环取模一圈、一次性在遍内取模（repeats>1 时每圈从头）
+    const t2 = this.stepElapsed % def.cum[def.cols];
+    const frame = this.frameIndex(def, t2);
+    if (frame !== this.frame) {
+      this.frame = frame;
+      this.emit();
     }
     this.raf = requestAnimationFrame(this.tick);
   };
@@ -311,14 +296,14 @@ export class PetEngine {
       const onSettle = action.onSettle;
       this.action = null;
       this.stopLoop();
-      // 单次末步播完 = 稳态（如「再见」17 帧播完 → 退出）；settled=false 说明循环分支没触发过
+      // 单次末步播完 = 稳态（如「再见」淡出前的最后一帧）；settled=false 说明循环分支没触发过
       if (!this.settled) onSettle?.();
       this.emit();
       return;
     }
     this.stepIdx++;
     this.startStep();
-    // 步进后必须续排循环，否则多步序列在第一步播完就停摆（启动序列曾卡死于 21 之后）
+    // 步进后必须续排循环，否则多步序列在第一步播完就停摆（启动序列曾卡死于中途）
     this.raf = requestAnimationFrame(this.tick);
   }
 

@@ -114,7 +114,7 @@ fn position_pet_and_board(app: &tauri::App) -> Result<(), Box<dyn std::error::Er
 }
 
 /// 系统托盘（工单 14，SystemTray）：左键单击开控制面板；右键菜单「打开控制面板」「退出」。
-/// 退出不在这里退进程——只向桌宠窗口发告别事件，跳箱动画（Oreo Cat 帧 17）播完由前端
+/// 退出不在这里退进程——只向桌宠窗口发告别事件，桌宠窗口淡出后（工单 17）由前端
 /// 走 exit_app 统一退出，与桌宠菜单「再见」共用同一通道（两条退出路径等价性由此保证）。
 fn setup_tray(app: &tauri::App) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "打开控制面板", true, None::<&str>)?;
@@ -157,7 +157,7 @@ fn reveal_control_panel(app: &tauri::AppHandle) {
     }
 }
 
-/// 托盘退出：向桌宠窗口发告别事件（跳箱动画播完由前端调 exit_app 关闭全部窗口并退进程）
+/// 托盘退出：向桌宠窗口发告别事件（桌宠窗口淡出后由前端调 exit_app 关闭全部窗口并退进程）
 fn request_exit(app: &tauri::AppHandle) {
     let _ = app.emit_to("pet", TRAY_EXIT_EVENT, ());
 }

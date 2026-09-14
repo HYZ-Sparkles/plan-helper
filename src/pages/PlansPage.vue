@@ -41,7 +41,7 @@
     <p v-if="loadError" class="load-error">{{ loadError }}</p>
 
     <div v-else-if="plans.length === 0" class="empty">
-      <p>还没有计划。立下第一个目标，让 Oreo 陪你完成。</p>
+      <p>还没有计划。立下第一个目标，让桌宠陪你完成。</p>
       <RouterLink to="/control-panel/create" class="primary-btn">创建第一个计划</RouterLink>
     </div>
 

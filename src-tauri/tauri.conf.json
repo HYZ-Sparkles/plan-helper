@@ -13,9 +13,9 @@
     "windows": [
       {
         "label": "pet",
-        "title": "Oreo",
-        "width": 64,
-        "height": 64,
+        "title": "桌宠",
+        "width": 96,
+        "height": 104,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
