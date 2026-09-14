@@ -56,7 +56,7 @@ import {
 } from "../lib/pet/actions";
 import { classifyDrag, type DragFeedback, type DragSample } from "../lib/pet/dragGesture";
 import { GAZE_DEADZONE_PX, lookIndex } from "../lib/pet/gaze";
-import { DEFAULT_SKIN, skinBySlug, type SkinDef } from "../lib/pet/skins";
+import { DEFAULT_SKIN, PET_SKIN_PREF_KEY, skinBySlug, type SkinDef } from "../lib/pet/skins";
 import { MENU_ACTION_EVENT, MENU_BLUR_EVENT, MENU_EXPIRE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
@@ -129,7 +129,7 @@ onMounted(async () => {
   // 形象持久化（工单 22）：上次选择（无记录 = 注册表首项默认；waving 已开播，
   // 图集加载完成前停在首帧，不重播启动序列）
   try {
-    skin.value = skinBySlug(await getPref("pet-skin"));
+    skin.value = skinBySlug(await getPref(PET_SKIN_PREF_KEY));
   } catch {
     /* 后端不可达：保持默认形象 */
   }
@@ -372,10 +372,15 @@ function armRandom() {
   window.setTimeout(() => fireRandom(gen), RANDOM_INTERVAL_MS);
 }
 
-/** 触发时刻的守卫全量复查（计时期间模式/阶段/拖拽可能已变）→ 抽签：50% 保持 idle
- *  下个间隔再抽；触发则按池 1:1 分流（被拒〔一次性动作播放中〕自愈重排） */
+/** 触发时刻的守卫全量复查（计时期间模式/阶段/拖拽/面板可能已变）→ 抽签：50% 保持
+ *  idle 下个间隔再抽；触发则按池 1:1 分流（被拒〔一次性动作播放中〕自愈重排）。
+ *  大面板开着 = waiting 循环演出（工单 20），随机动作不得打断——顺延下个间隔。 */
 function fireRandom(gen: number) {
-  if (gen !== randomGen || mode.value !== "rest" || phase.value !== "normal" || drag || !mover) return;
+  if (gen !== randomGen || mode.value !== "rest" || phase.value !== "normal" || !mover) return;
+  if (boardOpen || drag) {
+    armRandom();
+    return;
+  }
   if (Math.random() >= RANDOM_PROBABILITY) {
     armRandom();
     return;
@@ -403,7 +408,7 @@ function fireRoam(): boolean {
   const goingHome = awayX != null;
   const plan: RoamPlan | null = goingHome
     ? planReturn(fromX, homeX, mover!.workArea(), s.width, factor)
-    : planRoam(fromX, s.width, mover!.workArea(), factor, Math.random());
+    : planRoam(fromX, mover!.workArea(), s.width, factor, Math.random());
   if (!plan) return fireJump(); // 回程已在 home / 出程无空间：降级跳跃
   return engine.request({
     lock: false,
@@ -675,7 +680,9 @@ function onPointerMove(e: PointerEvent) {
   if (!d.moved) {
     if (Math.abs(dx) <= CLICK_SLOP_PX && Math.abs(dy) <= CLICK_SLOP_PX) return;
     d.moved = true;
-    if (d.btn === 2) startDragFeedback(); // 拖起瞬间 jumping（被提起的反应，工单 18）
+    // 拖起瞬间 jumping（被提起的反应，工单 18）——与方向切换共用 setDragFeedback：
+    // jumping 循环即刻稳态、可被方向实时替换、可抢占在播的一次性系统动作（拖拽是最强用户输入）
+    if (d.btn === 2) setDragFeedback("jumping");
   }
   if (d.btn !== 2) return; // 左键拖动不移动桌宠（2026-08-30 反馈：移动归右键），位移只作点击判定
   // 拖拽反馈：140ms 滑窗主方向（水平实时跟切反转 / 竖直 jumping / 轴向模糊保持当前）
@@ -690,14 +697,7 @@ function onPointerMove(e: PointerEvent) {
   placeBoardRaw(d.boardX + ax, d.boardY + ay);
 }
 
-/** 拖起（工单 18）：jumping 循环占住反馈位（用户动作：即刻稳态、可被方向实时替换、
- *  可抢占在播的一次性系统动作——拖拽是最强用户输入） */
-function startDragFeedback() {
-  dragAnim = "jumping";
-  engine.request(dragLoopAction(dragAnim));
-}
-
-/** 方向切换：只在判定变化时换（反转实时跟切；模糊 null 保持当前不抖动） */
+/** 方向切换：只在判定变化时换（拖起也走这里播 jumping；反转实时跟切；模糊 null 保持当前不抖动） */
 function setDragFeedback(fb: DragFeedback) {
   dragAnim = fb;
   engine.request(dragLoopAction(fb));

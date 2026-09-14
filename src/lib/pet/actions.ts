@@ -56,13 +56,22 @@ export interface RoamPlan {
   targetX: number;
 }
 
+/** 跑动步构造（出程与回程共用）：方向 → 对应专行 + 单遍位移（左右各专行、无需镜像） */
+function roamStep(direction: "left" | "right", distance: number): StepSpec {
+  return {
+    anim: direction === "right" ? "running-right" : "running-left",
+    loop: false,
+    movement: { direction, distance },
+  };
+}
+
 /** 规划一次自主移动单程（纯函数，回归覆盖）：从 fromX 出发、方向取屏幕余量大侧、
  *  单程 64~128 逻辑像素随机（r）、目标钳进工作区且距边 ≥20px；无足够空间返回 null
- *  （调用方降级为跳跃）。跑动用契约 running-right/left 单遍承载（左右各专行、无需镜像）。 */
+ *  （调用方降级为跳跃）。 */
 export function planRoam(
   fromX: number,
-  winW: number,
   area: { x: number; width: number },
+  winW: number,
   factor: number,
   r: number,
 ): RoamPlan | null {
@@ -78,18 +87,12 @@ export function planRoam(
   const dx = target - fromX;
   if (Math.abs(dx) < ROAM_MIN_ACTUAL_PX * factor) return null;
   const direction = dx > 0 ? "right" : "left";
-  return {
-    step: {
-      anim: direction === "right" ? "running-right" : "running-left",
-      loop: false,
-      movement: { direction, distance: Math.abs(dx) / factor },
-    },
-    targetX: target,
-  };
+  return { step: roamStep(direction, Math.abs(dx) / factor), targetX: target };
 }
 
 /** 规划跑向指定点（纯函数，回归覆盖）：away → home 的回程用——目标钳进当前工作区
- *  （显示器拓扑可能已变），位移方向 = 落点方向；已在目标点返回 null。 */
+ *  （显示器拓扑可能已变），位移方向 = 落点方向；已在目标点返回 null。
+ *  参数序与 planRoam 对齐（(fromX, …, area, winW, factor) 一致旅行，防调用错位）。 */
 export function planReturn(
   fromX: number,
   targetX: number,
@@ -101,14 +104,7 @@ export function planReturn(
   const dx = target - fromX;
   if (Math.abs(dx) < 1) return null;
   const direction = dx > 0 ? "right" : "left";
-  return {
-    step: {
-      anim: direction === "right" ? "running-right" : "running-left",
-      loop: false,
-      movement: { direction, distance: Math.abs(dx) / factor },
-    },
-    targetX: target,
-  };
+  return { step: roamStep(direction, Math.abs(dx) / factor), targetX: target };
 }
 
 /* ---- 业务里程碑（工单 20，PetActionPolicy 第 4 来源；系统动作不占锁） ---- */

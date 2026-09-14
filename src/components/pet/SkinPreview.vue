@@ -41,6 +41,6 @@ onUnmounted(() => clearTimeout(timer));
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  height: 104px; /* 契约窗口高（96×104 ÷2 格）——预览 = 实际尺寸 */
+  height: 104px; /* 契约窗口高（192×208 格 ÷2）——预览 = 实际尺寸 */
 }
 </style>

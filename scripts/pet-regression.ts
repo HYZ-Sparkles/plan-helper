@@ -27,7 +27,7 @@ import {
 } from "../src/lib/pet/actions";
 import { classifyDrag } from "../src/lib/pet/dragGesture";
 import { lookIndex } from "../src/lib/pet/gaze";
-import { lookCell } from "../src/lib/pet/animations";
+import { lookCell, PET_WIN, SHEET_SCALE } from "../src/lib/pet/animations";
 
 /* ---- rAF 桩：手动推进，全确定性 ---- */
 let rafQ: Array<(t: number) => void> = [];
@@ -97,6 +97,10 @@ check("waiting/running/review 循环", ANIMATIONS.waiting.loop && ANIMATIONS.run
 check(
   "前缀和末项 = 总时长",
   Object.values(ANIMATIONS).every((d) => d.cum[d.cols] === d.durations.reduce((a, b) => a + b, 0)),
+);
+check(
+  "窗口尺寸 = 格 ÷2（96×104，ADR-0010）",
+  PET_WIN.width === 96 && PET_WIN.height === 104 && SHEET_SCALE === 0.5,
 );
 
 /* ================= dragBounds：PetDragBounds 四约束 ================= */
@@ -327,7 +331,7 @@ check(
 // 情况：自主移动规划（factor=1、屏 0–644 可行域、窗 96）。正确：目标钳进工作区且
 // 距边 ≥20px；单程距离 64~128；方向取余量大侧；跑动步用对应专行并携带位移。
 const area = { x: 0, width: 640 };
-const plan = planRoam(100, 96, area, 1, 0.5);
+const plan = planRoam(100, area, 96, 1, 0.5);
 check("规划存在且落在边距内", plan !== null && plan.targetX >= 20 && plan.targetX <= 640 - 96 - 20);
 check("单程 64~128（r=0.5 → 96）", plan !== null && Math.abs(plan.targetX - 196) < 1e-9, `target=${plan?.targetX}`);
 check(
@@ -336,14 +340,14 @@ check(
 );
 // 情况：起点贴右缘（x=500，右界 524）。正确：右侧无空间 → 目标被钳到 ≤504 或规划降级，
 // 绝不越界。
-const edge = planRoam(500, 96, area, 1, 0.99);
+const edge = planRoam(500, area, 96, 1, 0.99);
 check(
   "贴右缘：钳制或降级，不越界",
   edge === null || (edge.targetX <= 524 && Math.abs(edge.targetX - 500) >= 48),
   `target=${edge?.targetX}`,
 );
 // 情况：完全无空间（工作区仅比窗宽 4px，已在极值位）。正确：降级为 null（调用方改跳跃）。
-check("无空间：降级 null", planRoam(0, 96, { x: 0, width: 100 }, 1, 0.5) === null);
+check("无空间：降级 null", planRoam(0, { x: 0, width: 100 }, 96, 1, 0.5) === null);
 
 // 情况：away → home 回程（fromX=250、home=100）。正确：朝左 running-left 专行、
 // 距离 = |home-from|、落点 = home。

@@ -423,6 +423,9 @@ export interface DailySummaryView {
   target_minutes: number;
   /** 基准 = 每日工作时间（分钟）：carryLabel 结转标注用 */
   base_minutes: number;
+  /** 当日是否达标（±10% 容差带下沿、基数 = 调整后目标；休息日加班态恒 false）：
+   *  工单 20 桌宠 failed 显示的判定源——前端不自推容差 */
+  met_target: boolean;
   /** 有更高优先级计划未开始提示 */
   higher_priority_hint: boolean;
   /** 推进过的计划（PlanOrdering：优先级降序 + 创建倒序）；当日零推进的不展示 */

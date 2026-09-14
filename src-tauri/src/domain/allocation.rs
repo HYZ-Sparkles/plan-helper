@@ -133,14 +133,19 @@ impl AllocationService {
         if ids.is_empty() {
             return Ok(false);
         }
-        let mut stmt = conn
-            .prepare("SELECT COUNT(*) FROM tasks WHERE id = ?1 AND status = 'Completed' AND deleted_at IS NULL")
-            .map_err(db_err)?;
-        Ok(ids.iter().all(|id| {
-            stmt.query_row(params![id], |row| row.get::<_, i64>(0))
-                .map(|n| n > 0)
-                .unwrap_or(false)
-        }))
+        // 选中集内"未删除且已完成"的任务数 = 选中集大小 ⇔ 全部完成（一次查询）
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "SELECT COUNT(*) FROM tasks WHERE status = 'Completed' AND deleted_at IS NULL
+             AND id IN ({placeholders})"
+        );
+        let n: i64 = conn.query_row(
+            &sql,
+            rusqlite::params_from_iter(ids.iter()),
+            |row| row.get(0),
+        )
+        .map_err(db_err)?;
+        Ok(n == ids.len() as i64)
     }
 
     /// 库中存储的选中集原样读出（无行或 JSON 损坏 → 空；调用方自行与候选求交）。

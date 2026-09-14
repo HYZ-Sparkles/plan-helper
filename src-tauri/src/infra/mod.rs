@@ -1,3 +1,4 @@
 //! 基础设施层：存储等外部资源接入。
 
 pub mod db;
+pub mod prefs;

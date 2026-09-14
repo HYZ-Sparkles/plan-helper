@@ -112,6 +112,9 @@ export const SKINS: SkinDef[] = [
 /** 默认形象 = 注册表首项（spec 69a：首次启动的记忆值） */
 export const DEFAULT_SKIN = SKINS[0];
 
+/** 形象偏好的存储键（工单 22 getPref/setPref 用——写读两侧共用一份，不各写魔法串） */
+export const PET_SKIN_PREF_KEY = "pet-skin";
+
 /** 按 slug 查形象；未知 slug 回落默认（存储值来自旧版本注册表时防炸） */
 export function skinBySlug(slug: string | null | undefined): SkinDef {
   return SKINS.find((s) => s.slug === slug) ?? DEFAULT_SKIN;

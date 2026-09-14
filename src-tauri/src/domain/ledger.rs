@@ -94,10 +94,16 @@ impl LedgerService {
     }
 }
 
+/// 某日是否达标（DailyCompletionTolerance 下沿）：完成量 ≥ 调整后目标 ×（1 − 10%）。
+/// 总结视图的 met_target（工单 20 failed 显示）与差额豁免共用这一条下沿。
+pub fn day_met(actual: f64, target: f64) -> bool {
+    actual >= target * (1.0 - TOLERANCE) - EPS
+}
+
 /// 某日的差额（正 = 欠债 → 上调后续；负 = 超额 → 下调后续）。
 /// 容差带 [0.9T, 1.1T] 内豁免为 0（带基数 T 是**调整后**目标）。
 fn day_debt(actual: f64, target: f64) -> f64 {
-    if actual >= target * (1.0 - TOLERANCE) - EPS && actual <= target * (1.0 + TOLERANCE) + EPS {
+    if day_met(actual, target) && actual <= target * (1.0 + TOLERANCE) + EPS {
         0.0
     } else {
         target - actual

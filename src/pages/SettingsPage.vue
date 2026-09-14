@@ -180,7 +180,7 @@ import { planErrorMessage } from "../lib/labels";
 import { localToday } from "../lib/validation";
 import DatePicker from "../components/DatePicker.vue";
 import SkinPreview from "../components/pet/SkinPreview.vue";
-import { DEFAULT_SKIN, SKINS, SKIN_SOURCE_REPO, skinBySlug } from "../lib/pet/skins";
+import { DEFAULT_SKIN, PET_SKIN_PREF_KEY, SKINS, SKIN_SOURCE_REPO, skinBySlug } from "../lib/pet/skins";
 
 /** 周一=1..周日=7 的展示名（周循环 chips 顺序） */
 const WEEKDAY_NAMES = ["一", "二", "三", "四", "五", "六", "日"];
@@ -210,7 +210,7 @@ async function pickSkin(slug: string) {
   if (skinSlug.value === slug) return;
   skinSlug.value = slug;
   try {
-    await setPref("pet-skin", slug);
+    await setPref(PET_SKIN_PREF_KEY, slug);
     await emitTo("pet", PET_SKIN_CHANGED_EVENT, { slug });
   } catch {
     /* 后端不可达：本地选择保留（本次会话内选择器状态正确），下次进页面重读 */
@@ -236,7 +236,7 @@ async function reload() {
 onMounted(async () => {
   await reload();
   try {
-    skinSlug.value = skinBySlug(await getPref("pet-skin")).slug;
+    skinSlug.value = skinBySlug(await getPref(PET_SKIN_PREF_KEY)).slug;
   } catch {
     /* 后端不可达：保持默认形象 */
   }

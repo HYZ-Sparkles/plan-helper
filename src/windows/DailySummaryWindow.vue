@@ -182,11 +182,11 @@ onMounted(async () => {
   }
   // 自动触发与控制面板调出都走 show 事件带日期；进展事件到达重取（实时重算）。
   // 弹出且未达标 → 桌宠演一次 failed（工单 20：只在"弹出"时判定，开着时的 refresh
-  // 重算不再触发；未达标 = 工作日且完成量低于目标 −10% 容差，与工时账户同口径）
+  // 重算不再触发；met_target 是服务端按 ±10% 容差算好的达标判定，与工时账户同口径）
   await listen<{ date: string }>(SUMMARY_SHOW_EVENT, async (e) => {
     await load(e.payload.date);
     const v = summary.value;
-    if (v && v.workday && v.total_minutes < v.target_minutes * 0.9) {
+    if (v && !v.met_target) {
       void emitTo("pet", PET_MILESTONE_EVENT, { kind: "failed" });
     }
   });

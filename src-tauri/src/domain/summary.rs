@@ -18,7 +18,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 
 use crate::clock::Clock;
-use crate::domain::ledger::LedgerService;
+use crate::domain::ledger::{day_met, LedgerService};
 use crate::domain::plans::{
     db_err, PlanError, PlanService, PlanStatus, PauseReason, Priority, SubGoalView,
 };
@@ -74,6 +74,9 @@ pub struct DailySummaryView {
     pub target_minutes: f64,
     /// 基准 = 每日工作时间（分钟）：与 target 的差额即结转，carryLabel 标注用
     pub base_minutes: u32,
+    /// 当日是否达标（±10% 容差带下沿，基数 = 调整后目标；休息日加班态恒 false——
+    /// 无目标义务）：工单 20 failed 显示的判定源，前端不再自推容差
+    pub met_target: bool,
     /// 有更高优先级计划未开始提示：存在 NotStarted 计划，优先级**严格高于**今日推进过
     /// 的计划中的最高优先级（今天什么都没推时，任何 NotStarted 计划都算）
     pub higher_priority_hint: bool,
@@ -241,15 +244,18 @@ impl SummaryService {
         });
         let target = LedgerService::day_target_on(conn, date)?;
         let today = clock.now().date_naive();
+        // 归属日按其生效配置解析（周循环 + 日期例外；工单 13）；休息日加班态无目标
+        // 义务——met_target 恒 false（与 workday 同源判定）
+        let workday = cal.for_date(date).is_workday_on(date);
         Ok(DailySummaryView {
             date: date.to_string(),
             is_today: date == today,
             is_yesterday: date == today - Duration::days(1),
-            // 归属日按其生效配置解析（周循环 + 日期例外；工单 13）
-            workday: cal.for_date(date).is_workday_on(date),
+            workday,
             total_minutes: total,
             target_minutes: target.target_minutes,
             base_minutes: target.base_minutes,
+            met_target: workday && day_met(total, target.target_minutes),
             higher_priority_hint,
             plans,
         })

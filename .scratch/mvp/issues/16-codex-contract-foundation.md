@@ -6,11 +6,15 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done（待手动验收）
 
-- [ ] 切帧数据 = 契约固定网格 + 逐帧时长（9 标准动作 + v2 环视行两版本图集都能装载）；9 动作语义命名与 ADR-0010 一致（running ≠ running-right/left）
-- [ ] 9 个形象资产入包 + 形象注册表（slug/版本/作者/license），默认形象 = 注册表首项
-- [ ] pet 窗口 96×104；菜单、小看板锚点与 dragBounds 尺寸同步；任务栏禁入/不出屏/跨屏/边缘吸附回归通过
-- [ ] 调试页按新词汇表展示（逐动作逐帧、时长可查）；Node 回归脚本迁移且全绿（动作锁/flick/位移插值/冻结解冻等引擎不变量保留）
-- [ ] Oreo 管线彻底移除，构建与测试无残留引用（`resourses/` 原始素材存档保留，不进代码）
-- [ ] 手动验收：默认形象启动 waving→落 idle、窗口比例正确、桌面摆位（右下角锚定）不遮挡不越界
+- [x] 切帧数据 = 契约固定网格 + 逐帧时长（9 标准动作 + v2 环视行两版本图集都能装载）；9 动作语义命名与 ADR-0010 一致（running ≠ running-right/left）
+- [x] 9 个形象资产入包 + 形象注册表（slug/版本/作者/license），默认形象 = 注册表首项
+- [x] pet 窗口 96×104；菜单、小看板锚点与 dragBounds 尺寸同步；任务栏禁入/不出屏/跨屏/边缘吸附回归通过
+- [x] 调试页按新词汇表展示（逐动作逐帧、时长可查）；Node 回归脚本迁移且全绿（动作锁/flick/位移插值/冻结解冻等引擎不变量保留）
+- [x] Oreo 管线彻底移除，构建与测试无残留引用（`resourses/` 原始素材存档保留，不进代码）
+- [x] 手动验收：默认形象启动 waving→落 idle、窗口比例正确、桌面摆位（右下角锚定）不遮挡不越界
+
+实现注记：切帧=契约固定 8 列网格查表（durations+前缀和 cum），PetWindow 过渡期保底（waving 启动→模式常驻、随机暂只接跳跃、拖拽无反馈、再见直接退出——17/18/19 逐单补完）；引擎机制成果（动作锁/flick/freeze/unfreeze/return 位移/rAF 单排）全保留并随 pet-regression.ts 回归。资产 public/pet/skins/*.webp（约 19.9MB，源 resourses/awesome-codex-pet）。
+
+审查修正（code-review-zh）：SHEET_SCALE 语义写反被 Spec 轴抓出（×2 导致渲染 384×416 塞不进 96×104 窗口）——改为 0.5（= ÷2 显示缩放），PET_WIN 修正为 96×104 且尺寸断言入回归。

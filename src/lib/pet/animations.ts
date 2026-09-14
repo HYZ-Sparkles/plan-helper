@@ -1,10 +1,11 @@
 /**
  * codex 桌宠契约动画数据（工单 16，CodexPetContract / ADR-0010）：
  * 单张雪碧图 = 固定 8 列网格、格 192×208（v1 图集 1536×1872 = 9 行、v2 1536×2288 = 11 行），
- * 第 0–8 行是 9 个标准动作、v2 第 9–10 行是 16 向环视静态姿势；每帧时长由契约硬性规定
- * （awesome-codex-pet .agents/skills/hatch-pet-v1/references/animation-rows.md）。
- * 形象只是皮肤（skins.ts 注册表），本文件对所有形象成立；替代 Oreo 的
- * "fps + 非透明列段检测 + NUDGE/帧序/位移权重" 验收调整管线（契约无调参空间）。
+ * 显示时 ÷2 缩放（窗口 96×104）；第 0–8 行是 9 个标准动作、v2 第 9–10 行是 16 向环视
+ * 静态姿势；每帧时长由契约硬性规定（awesome-codex-pet .agents/skills/hatch-pet-v1/
+ * references/animation-rows.md）。形象只是皮肤（skins.ts 注册表），本文件对所有形象
+ * 成立；替代 Oreo 的"fps + 非透明列段检测 + NUDGE/帧序/位移权重"验收调整管线
+ * （契约无调参空间）。
  */
 
 /** 契约动作名（= 图集行序 0–8；键序即行序，勿重排） */
@@ -23,10 +24,11 @@ export type PetAnim =
 export const GRID_COLS = 8;
 export const CELL_W = 192;
 export const CELL_H = 208;
-/** 渲染缩放：÷2 整数缩放保证像素干净（ADR-0010） */
-export const SHEET_SCALE = 2;
-/** 桌宠窗口逻辑尺寸 = 格 × 缩放 */
-export const PET_WIN = { width: (CELL_W * SHEET_SCALE) / 2, height: (CELL_H * SHEET_SCALE) / 2 };
+/** 渲染缩放：÷2（格 192×208 → 显示 96×104，坐标皆偶数、缩放后仍是整数像素——
+ *  ADR-0010"÷2 整数缩放保证像素干净"） */
+export const SHEET_SCALE = 0.5;
+/** 桌宠窗口逻辑尺寸 = 格 × 缩放（96×104） */
+export const PET_WIN = { width: CELL_W * SHEET_SCALE, height: CELL_H * SHEET_SCALE };
 
 export interface AnimationDef {
   /** 图集行号（0–8） */

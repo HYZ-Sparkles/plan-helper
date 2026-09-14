@@ -6,10 +6,14 @@
 
 **Blocked by:** 17 模式常驻与生命周期编排
 
-**Status:** ready-for-agent
+**Status:** done（待手动验收）
 
-- [ ] 拖起瞬间 jumping；水平拖动方向动画正确（右→running-right、左→running-left）且中途反转实时跟切
-- [ ] 纯竖直拖动 jumping；轴向模糊（斜向不足 1.12 偏差比）保持当前动作不抖动
-- [ ] 松手立即回常驻（工作 running / 休息 idle），无遗留后续编排
-- [ ] 拖拽期间小看板刚性随动（一个被挡全体一起停）、四条边界约束回归通过
-- [ ] 手动验收：四方向拖拽、中途反转、竖直、松手回常驻、看板随动
+- [x] 拖起瞬间 jumping；水平拖动方向动画正确（右→running-right、左→running-left）且中途反转实时跟切
+- [x] 纯竖直拖动 jumping；轴向模糊（斜向不足 1.12 偏差比）保持当前动作不抖动
+- [x] 松手立即回常驻（工作 running / 休息 idle），无遗留后续编排
+- [x] 拖拽期间小看板刚性随动（一个被挡全体一起停）、四条边界约束回归通过
+- [x] 手动验收：四方向拖拽、中途反转、竖直、松手回常驻、看板随动
+
+实现注记：classifyDrag 纯函数（140ms 滑窗首尾位移主方向、1.12 偏差比，Node 回归覆盖含反转跟切与窗口淘汰）；拖起与方向切换共用 setDragFeedback（dragLoopAction 用户锁 + 单循环步即刻稳态支撑实时替换、可抢占一次性系统动作）；松手 afterOneShot 统一结算。
+
+审查修正（code-review-zh Standards）：startDragFeedback 并入 setDragFeedback("jumping")（函数体重复）。

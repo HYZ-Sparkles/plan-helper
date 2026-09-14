@@ -2,10 +2,10 @@
 //! 业务逻辑全部在 domain，command 不做判断。
 
 use chrono::{DateTime, Local};
-use rusqlite::params;
 use tauri::State;
 
 use crate::app_state::AppState;
+use crate::infra::prefs;
 use crate::domain::allocation::{AllocationBoardView, AllocationService};
 use crate::domain::app_state::{app_state_view, AppStateView};
 use crate::domain::lifecycle::{CopyAsNewOutcome, LifecycleOutcome, LifecycleService};
@@ -277,24 +277,16 @@ pub fn get_cursor_pos() -> Option<(i32, i32)> {
 #[tauri::command]
 pub fn get_pref(state: State<'_, AppState>, key: String) -> Option<String> {
     let conn = state.db.lock().unwrap();
-    conn.query_row("SELECT value FROM app_prefs WHERE key = ?1", params![key], |r| r.get(0))
-        .map(Some)
-        .or_else(|e| match e {
-            rusqlite::Error::QueryReturnedNoRows => Ok(None),
-            e => Err(e),
-        })
-        .unwrap_or(None)
+    prefs::get(&conn, &key).unwrap_or(None)
 }
 
 /// 写一条界面偏好（工单 22）：覆盖式，无生效时机语义（区别于 save_settings）。
 #[tauri::command]
 pub fn set_pref(state: State<'_, AppState>, key: String, value: String) {
     let conn = state.db.lock().unwrap();
-    let _ = conn.execute(
-        "INSERT INTO app_prefs (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = ?2",
-        params![key, value],
-    );
+    if let Err(e) = prefs::set(&conn, &key, &value) {
+        eprintln!("set_pref({key}) 失败：{e}");
+    }
 }
 
 /// Win32 GetCursorPos（user32 原生 FFI，免引 windows crate）

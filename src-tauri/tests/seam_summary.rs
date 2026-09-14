@@ -202,6 +202,33 @@ fn summary_assembles_three_layers_in_priority_order() {
 }
 
 #[test]
+fn met_target_follows_tolerance_band_and_workday() {
+    // 测试情况（工单 20 failed 显示源 met_target）：默认目标 300 分（容差带下沿
+    //           = 270），300 分任务报 80%（240 分，带外欠）→ 再报 10%（+30 分，恰到
+    //           270 带内）；另在周日（非工作日）推进 180 分。
+    // 正确结果：240 → false；270 → true（±10% 容差带下沿恰达标，与工时账户同口径）；
+    //           休息日加班态恒 false（无目标义务）。
+    let conn = db::open_in_memory().unwrap();
+    let (_, t1) = active_plan(&conn, "干活", Priority::Medium, plain_task("一", 300));
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 9, 30), t1, 80.0).unwrap();
+    let v = SummaryService::summary(&conn, &at(2026, 8, 24, 12, 0), parse_date(MON).unwrap()).unwrap();
+    assert_eq!(v.total_minutes, 240.0);
+    assert!(!v.met_target, "240 < 270（带外欠）→ 未达标");
+
+    ProgressService::report_percent(&conn, &at(2026, 8, 24, 13, 0), t1, 10.0).unwrap();
+    let v = SummaryService::summary(&conn, &at(2026, 8, 24, 14, 0), parse_date(MON).unwrap()).unwrap();
+    assert_eq!(v.total_minutes, 270.0);
+    assert!(v.met_target, "270 = 300 × 0.9 恰入容差带下沿 → 达标");
+
+    // 周日（默认周一至五工作）推进 180 分：加班态无目标义务，恒 false
+    let (_, t3) = active_plan(&conn, "加班", Priority::Medium, plain_task("三", 300)); // 同级可并行（抢占不变式）
+    ProgressService::report_percent(&conn, &at(2026, 8, 23, 20, 0), t3, 60.0).unwrap();
+    let sun = SummaryService::summary(&conn, &at(2026, 8, 23, 21, 0), parse_date("2026-08-23").unwrap()).unwrap();
+    assert!(!sun.workday);
+    assert!(!sun.met_target, "休息日加班态恒未达标判定（无目标义务）");
+}
+
+#[test]
 fn preempted_paused_plans_still_shown_and_counted() {
     // 测试情况：两个计划当日各有推进后分别暂停——A 记"自动抢占"、B 记"用户主动"。
     // 正确结果：两者照常出 section（干了的活就是干了），A 标注"已被抢占暂停"、B 不标；
