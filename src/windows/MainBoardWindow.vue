@@ -133,8 +133,9 @@ import MicroBar from "../components/MicroBar.vue";
 import PriorityLabel from "../components/PriorityLabel.vue";
 import StatusBadge from "../components/StatusBadge.vue";
 import {
-  MAIN_BOARD_REOPEN_EVENT,
   MAIN_BOARD_REFRESH_EVENT,
+  MAIN_BOARD_REOPEN_EVENT,
+  MAIN_BOARD_VISIBILITY_EVENT,
   MINI_BOARD_REFRESH_EVENT,
 } from "../lib/events";
 import {
@@ -207,6 +208,7 @@ async function confirm() {
     // （2026-08-30 反馈：显隐唯一持有者是桌宠，这里不再直接 show）
     await emitTo("mini-board", MINI_BOARD_REFRESH_EVENT);
     await win.hide(); // 关闭 = 隐藏（CONTEXT 窗口关闭语义），重开入口在控制面板
+    await notifyVisibility(false); // 工单 20：面板关闭 → 桌宠 waiting 回常驻（hide 后发，时序即真相）
   } catch (err) {
     commitError.value = planErrorMessage(err as PlanErrorShape);
   } finally {
@@ -216,17 +218,28 @@ async function confirm() {
 
 onMounted(async () => {
   await load();
-  // 重开刷新：控制面板「打开大面板」先发事件再 show，这里回到最新数据（依赖/状态可能已变）
-  await listen(MAIN_BOARD_REOPEN_EVENT, load);
+  // 重开刷新：控制面板「打开大面板」先发事件再 show，这里回到最新数据（依赖/状态可能已变）；
+  // 重开即"面板将开"——通知桌宠落 waiting（工单 20，任何打开路径都汇到 reopen 事件）
+  await listen(MAIN_BOARD_REOPEN_EVENT, async () => {
+    await load();
+    await notifyVisibility(true);
+  });
   // 生命周期变化（工单 12）：开始/暂停/恢复/完成/放弃/复制落库后静默重取——
   // 被抢占的计划立刻灰显进入"暂停"分组，自动恢复的计划回到候选（显隐不变）
   await listen(MAIN_BOARD_REFRESH_EVENT, load);
-  // 系统关闭请求拦截为隐藏（与「确认」同一语义；正式的关闭语义归工单 14 统一）
+  // 系统关闭请求拦截为隐藏（与「确认」同一语义；正式的关闭语义归工单 14 统一）；
+  // 隐藏后通知桌宠 waiting 回常驻（工单 20）
   await win.onCloseRequested(async (e) => {
     e.preventDefault();
     await win.hide();
+    await notifyVisibility(false);
   });
 });
+
+/** 面板可见性回执（工单 20，waiting 起止）：亮出/隐藏后发 pet，桌宠切 waiting 常驻 */
+async function notifyVisibility(open: boolean) {
+  await emitTo("pet", MAIN_BOARD_VISIBILITY_EVENT, { open });
+}
 </script>
 
 <style scoped>

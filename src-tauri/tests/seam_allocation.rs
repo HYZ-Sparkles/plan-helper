@@ -269,6 +269,54 @@ fn allocation_expires_next_day() {
 }
 
 #[test]
+fn today_all_complete_requires_nonempty_selection_of_completed_tasks() {
+    // 测试情况（工单 20 庆祝触发源 today_all_complete）：分配 A+SG 两任务后逐一完成；
+    //           未分配 / 部分完成 / 全部完成 / 完成后软删除其一 / 隔日 五种状态查询。
+    // 正确结果：仅"今日已分配且非空且全部为未删除的 Completed"为 true——未分配恒
+    //           false（防"什么都没选也庆祝"）、部分完成 false、全完 true、软删除
+    //           其一回 false、隔日分配失效 false。
+    let conn = db::open_in_memory().unwrap();
+    let p = PlanService::create(&conn, &at(2026, 8, 23, 9, 0), &sample("庆祝")).unwrap();
+    LifecycleService::start(&conn, p).unwrap();
+    let v = AllocationService::board(&conn, &at(2026, 8, 24, 8, 0)).unwrap();
+    let ids: Vec<i64> = v.groups[0].tasks.iter().map(|t| t.id).collect();
+    let (a, sg) = (ids[0], ids[1]); // 候选 = A、SG（B 被阻塞不展示）
+
+    assert!(
+        !AllocationService::today_all_complete(&conn, &at(2026, 8, 24, 8, 30)).unwrap(),
+        "未分配恒 false"
+    );
+    AllocationService::commit(&conn, &at(2026, 8, 24, 8, 30), &[a, sg]).unwrap();
+    assert!(
+        !AllocationService::today_all_complete(&conn, &at(2026, 8, 24, 9, 0)).unwrap(),
+        "两个都未完成 false"
+    );
+    force_task_status(&conn, a, TaskStatus::Completed);
+    assert!(
+        !AllocationService::today_all_complete(&conn, &at(2026, 8, 24, 10, 0)).unwrap(),
+        "还差 SG false"
+    );
+    force_task_status(&conn, sg, TaskStatus::Completed);
+    assert!(
+        AllocationService::today_all_complete(&conn, &at(2026, 8, 24, 11, 0)).unwrap(),
+        "选中集全部 Completed → true"
+    );
+    conn.execute(
+        "UPDATE tasks SET deleted_at = '2026-08-24T11:30:00+08:00' WHERE id = ?1",
+        rusqlite::params![a],
+    )
+    .unwrap();
+    assert!(
+        !AllocationService::today_all_complete(&conn, &at(2026, 8, 24, 12, 0)).unwrap(),
+        "软删除其一回 false（归档任务不算数）"
+    );
+    assert!(
+        !AllocationService::today_all_complete(&conn, &at(2026, 8, 25, 9, 0)).unwrap(),
+        "隔日分配失效 false"
+    );
+}
+
+#[test]
 fn should_auto_open_respects_date_override() {
     // 测试情况（工单 13 日期例外 × 自动打开判定）：周二 8/25（工作日）被例外标为
     //           休息（标明天——例外只能标注将来，story 46/48）。

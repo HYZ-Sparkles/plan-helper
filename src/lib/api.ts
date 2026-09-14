@@ -63,9 +63,15 @@ export function shouldAutoOpenMainBoard(workMode: boolean, manual: boolean): Pro
   return invoke<boolean>("should_auto_open_main_board", { workMode, manual });
 }
 
-/** 再见：跳箱动画播完后退出整个应用（关闭全部窗口；托盘退出（工单 14）走同一通道） */
+/** 再见：退出整个应用（关闭全部窗口；托盘退出（工单 14）走同一通道） */
 export function exitApp(): Promise<void> {
   return invoke("exit_app");
+}
+
+/** 今日任务是否全部完成（工单 20 庆祝触发源）：小看板汇报后查询，false→true 跃迁
+ *  触发桌宠庆祝 jumping；未分配/空集恒 false（防"什么都没选也庆祝"） */
+export function todayTasksAllComplete(): Promise<boolean> {
+  return invoke<boolean>("today_tasks_all_complete");
 }
 
 /* ---- 计划领域（工单 02+）---- */

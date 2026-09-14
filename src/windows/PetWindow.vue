@@ -40,15 +40,18 @@ import { PetEngine, type EngineState, type PetMover } from "../lib/pet/engine";
 import { createTauriMover } from "../lib/pet/tauriMover";
 import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dragBounds";
 import {
+  celebrateSteps,
   chassisAction,
   chassisAnim,
   dragLoopAction,
+  failedSteps,
   jumpSteps,
   pickRandomKind,
   planReturn,
   planRoam,
   RANDOM_INTERVAL_MS,
   RANDOM_PROBABILITY,
+  reviewSteps,
   type RoamPlan,
 } from "../lib/pet/actions";
 import { classifyDrag, type DragFeedback, type DragSample } from "../lib/pet/dragGesture";
@@ -56,7 +59,7 @@ import { DEFAULT_SKIN, type SkinDef } from "../lib/pet/skins";
 import { MENU_ACTION_EVENT, MENU_BLUR_EVENT, MENU_EXPIRE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
-import { MAIN_BOARD_REOPEN_EVENT, MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
+import { MAIN_BOARD_REOPEN_EVENT, MAIN_BOARD_VISIBILITY_EVENT, MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, PET_MILESTONE_EVENT, SETTINGS_CHANGED_EVENT, type MilestoneKind } from "../lib/events";
 import { exitApp, getDailySummaryStatus, getMiniBoard, getNextWindowStart, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
 /** 判定为"点击"的最大位移（逻辑像素，小于它不算拖拽） */
@@ -88,6 +91,13 @@ let reservedSeq = 0;
 let lastSyncedLocked: boolean | null = null;
 /** 随机动作调度代号：每次重新排程/离开休息模式自增，旧定时器自弃 */
 let randomGen = 0;
+/** 大面板开着（waiting 裁决源，工单 20）：自己亮面板直接置位；此后由 MainBoard 的
+ *  visibility 事件（亮出/隐藏回执）维护 */
+let boardOpen = false;
+/** 在播的里程碑演出（工单 20）：演出中再到达 → 转 pendingMilestone 合并补一次（不排队） */
+let playingMilestone: MilestoneKind | null = null;
+/** 待播里程碑：引擎被一次性动作占用（随机/另一里程碑/拖拽）时累积，结算后补一次 */
+let pendingMilestone: MilestoneKind | null = null;
 
 const interactionsOff = () => phase.value !== "normal";
 
@@ -157,6 +167,15 @@ onMounted(async () => {
     void armDailySummary();
     void armWindowStart();
   });
+  // 大面板可见性（工单 20，waiting 起止裁决）："面板开着 = 等你分配"——不区分今日
+  // 是否已确认、不区分当前模式；亮出/隐藏回执维护 boardOpen 并重落常驻
+  await listen<{ open: boolean }>(MAIN_BOARD_VISIBILITY_EVENT, (e) => {
+    boardOpen = e.payload.open;
+    applyChassis();
+  });
+  // 业务里程碑（工单 20，PetActionPolicy 第 4 来源）：小看板推进型汇报 review /
+  // 总结弹出未达标 failed / 今日任务全部完成庆祝——密集合并反馈不排队
+  await listen<{ kind: MilestoneKind }>(PET_MILESTONE_EVENT, (e) => onMilestone(e.payload.kind));
 });
 
 /** 启动时对小看板（Rust 侧已按"工作时间 + 有当前任务"决定显隐）：缓存几何并对齐挂靠
@@ -176,24 +195,15 @@ async function syncBoardAtStartup() {
   }
 }
 
-/** 落常驻：按当下状态请求常驻循环（大面板开着 = waiting——工单 20 补面板关闭事件
- *  的即时回常驻，本单在每次落常驻时查实时可见性）。常驻未变不重排（循环从头会闪一帧）；
- *  正在播一次性动作时被引擎拒绝——其 onSettle 会再调一次，届时自然落到最新状态。
- *  flick = 模式硬切的淡出淡入兜底（换常驻来自不同动作族、无过渡帧可衔接）。 */
-async function applyChassis(flick = false) {
+/** 落常驻：按当下状态请求常驻循环（大面板开着 = waiting，工单 20 事件裁决）。
+ *  常驻未变不重排（循环从头会闪一帧）；正在播一次性动作时被引擎拒绝——其结算
+ *  （afterOneShot）会再调一次，届时自然落到最新状态。flick = 模式硬切的淡出淡入
+ *  兜底（换常驻来自不同动作族、无过渡帧可衔接）。 */
+function applyChassis(flick = false) {
   if (phase.value !== "normal" || drag) return; // 拖拽中反馈动作归拖拽，常驻等松手
-  const target = chassisAnim(mode.value, await mainBoardVisible());
+  const target = chassisAnim(mode.value, boardOpen);
   if (sprite.anim === target && engine.state().busy) return; // 常驻已在播且未变
   engine.request(chassisAction(target, flick));
-}
-
-/** 大面板当前是否可见（waiting 的触发源；任何打开路径都反映到窗口可见性上） */
-async function mainBoardVisible(): Promise<boolean> {
-  try {
-    return (await WebviewWindow.getByLabel("main-board"))?.isVisible() ?? false;
-  } catch {
-    return false;
-  }
 }
 
 /** 启动序列完成：进入正常态并按初始模式三分流（工单 17）——工作且大面板即将自动
@@ -202,12 +212,12 @@ async function mainBoardVisible(): Promise<boolean> {
 async function onStartupSettled() {
   phase.value = "normal";
   if (mode.value === "rest") {
-    await applyChassis();
+    applyChassis();
     armRandom();
     return;
   }
   await checkAutoOpen(false);
-  await applyChassis();
+  applyChassis();
 }
 
 /** AutoOpenMainBoard 检测：工作模式 + 今日未分配 → 弹大面板（沿用控制面板的重开语义带回数据）。
@@ -223,6 +233,7 @@ async function checkAutoOpen(manual: boolean) {
 }
 
 async function openMainBoard() {
+  boardOpen = true; // 自己亮面板直接置位（工单 20 waiting 裁决；MainBoard 的 visibility 事件维护后续）
   // 重开必须带回最新数据（06 的重开语义），再共享通道亮到前台（unminimize→show→setFocus）
   await emitTo("main-board", MAIN_BOARD_REOPEN_EVENT);
   await revealWindow("main-board");
@@ -247,13 +258,13 @@ async function switchMode() {
     randomGen++; // 作废随机动作计时（工作模式不触发）
     void restoreMiniBoard();
     await checkAutoOpen(true); // 手动切入 = 主动加班：非工作日也弹大面板选任务
-    await applyChassis(true);
+    applyChassis(true);
   } else {
     mode.value = "rest";
     randomGen++;
     boardAttached = false;
     void hideWindow("mini-board"); // 休息即不工作（67）
-    await applyChassis(true);
+    applyChassis(true);
     armRandom();
   }
 }
@@ -360,7 +371,7 @@ function fireJump(): boolean {
   return engine.request({
     lock: false, // 系统随机动作不占锁
     steps: jumpSteps(),
-    onSettle: onRandomSettled,
+    onSettle: () => afterOneShot(armRandom),
   });
 }
 
@@ -379,17 +390,44 @@ function fireRoam(): boolean {
   return engine.request({
     lock: false,
     steps: [plan.step],
-    onSettle: () => {
-      awayX = goingHome ? null : plan.targetX; // 跑出留下；跑回归位
-      onRandomSettled();
-    },
+    onSettle: () =>
+      afterOneShot(() => {
+        awayX = goingHome ? null : plan.targetX; // 跑出留下；跑回归位
+        armRandom();
+      }),
   });
 }
 
-/** 随机动作结束：回常驻并起下一轮计时（间隔从动作结束算起） */
-function onRandomSettled() {
-  void applyChassis();
-  armRandom();
+/* ---- 业务里程碑（20，PetActionPolicy 第 4 来源）：系统动作无锁、密集合并不排队；
+   ---- waiting 由面板可见性事件直接驱动常驻替换（不是一次性演出） ---- */
+
+/** 里程碑到达：启动/告别期丢弃；拖拽中或演出占用时转 pending（播完补一次） */
+function onMilestone(kind: MilestoneKind) {
+  if (phase.value !== "normal") return;
+  if (drag || playingMilestone || !playMilestone(kind)) pendingMilestone = kind;
+}
+
+/** 播一次里程碑演出（review×2 ≈ 2.06s / failed 1.22s / 庆祝 jumping）；返回是否占上
+ *  引擎（一次性随机动作在播时被拒 → 转 pending 由其结算补播） */
+function playMilestone(kind: MilestoneKind): boolean {
+  const steps = kind === "review" ? reviewSteps() : kind === "failed" ? failedSteps() : celebrateSteps();
+  const ok = engine.request({ lock: false, steps, onSettle: () => afterOneShot() });
+  if (ok) playingMilestone = kind;
+  return ok;
+}
+
+/** 一次性演出（随机动作/里程碑/拖拽抢占后失去 onSettle）的共同结算：extra（随机动作
+ *  的 away 记账与计时重排）先行，再补一次待播里程碑（合并语义），否则回常驻 */
+function afterOneShot(extra?: () => void) {
+  playingMilestone = null;
+  extra?.();
+  if (pendingMilestone) {
+    const kind = pendingMilestone;
+    pendingMilestone = null;
+    playMilestone(kind);
+  } else {
+    applyChassis();
+  }
 }
 
 /** 告别淡出时长：CSS 过渡 280ms + 余量（淡完才关窗，不闪黑框） */
@@ -637,13 +675,14 @@ function onPointerUp() {
   mover.moveTo(d.winX + ax, d.winY + ay);
   placeBoardRaw(d.boardX + ax, d.boardY + ay);
   // 松手立即回常驻、无任何后续编排（工单 18：拖后 Attack 废除）；拖拽落点 = 新 home、
-  // 旧 away 作废（工单 19：位置控制权归用户；被拖拽抢占的自主移动也因此不欠账）；
-  // 随机计时从用户动作结束重排（休息模式）
+  // 旧 away 作废（工单 19：位置控制权归用户；被拖拽抢占的自主移动因此不欠账）；
+  // 里程碑占用被拖拽抢占（onSettle 不会来）也在此统一结算（工单 20）
   dragAnim = null;
   homeX = mover.position().x;
   awayX = null;
-  void applyChassis();
-  if (mode.value === "rest") armRandom();
+  afterOneShot(() => {
+    if (mode.value === "rest") armRandom(); // 随机计时从用户动作结束重排
+  });
 }
 
 /** 右键：亮出菜单形态（设定式——已开着就原样重亮，关闭靠失焦或点菜单项） */

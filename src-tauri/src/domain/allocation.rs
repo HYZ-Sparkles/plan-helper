@@ -126,6 +126,23 @@ impl AllocationService {
             > 0)
     }
 
+    /// 今日任务是否**全部完成**（工单 20 庆祝触发源）：今日已分配、选中集非空且
+    /// 全部为未删除的 Completed 任务。未分配或空集不算（防"什么都没选也庆祝"）。
+    pub fn today_all_complete(conn: &Connection, clock: &dyn Clock) -> Result<bool, PlanError> {
+        let ids = Self::stored_selection(conn, clock)?;
+        if ids.is_empty() {
+            return Ok(false);
+        }
+        let mut stmt = conn
+            .prepare("SELECT COUNT(*) FROM tasks WHERE id = ?1 AND status = 'Completed' AND deleted_at IS NULL")
+            .map_err(db_err)?;
+        Ok(ids.iter().all(|id| {
+            stmt.query_row(params![id], |row| row.get::<_, i64>(0))
+                .map(|n| n > 0)
+                .unwrap_or(false)
+        }))
+    }
+
     /// 库中存储的选中集原样读出（无行或 JSON 损坏 → 空；调用方自行与候选求交）。
     /// progress 域（工单 07）复用：当前任务须落在今日推进列表内。
     pub(crate) fn stored_selection(

@@ -103,7 +103,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { PhCheck, PhCheckCircle, PhCoffee, PhCaretUp, PhFlag, PhTarget } from "@phosphor-icons/vue";
 import MicroBar from "../components/MicroBar.vue";
@@ -116,6 +116,7 @@ import {
 } from "../lib/api";
 import { carryLabel, hoursFromMinutes, hoursLabel, planErrorMessage } from "../lib/labels";
 import { SUMMARY_REFRESH_EVENT, SUMMARY_SHOW_EVENT } from "../lib/summary";
+import { PET_MILESTONE_EVENT } from "../lib/events";
 
 const win = getCurrentWebviewWindow();
 const summary = ref<DailySummaryView | null>(null);
@@ -179,8 +180,16 @@ onMounted(async () => {
   } catch {
     /* 浏览器直开 / 后端不可达：等 show 事件 */
   }
-  // 自动触发与控制面板调出都走 show 事件带日期；进展事件到达重取（实时重算）
-  await listen<{ date: string }>(SUMMARY_SHOW_EVENT, (e) => load(e.payload.date));
+  // 自动触发与控制面板调出都走 show 事件带日期；进展事件到达重取（实时重算）。
+  // 弹出且未达标 → 桌宠演一次 failed（工单 20：只在"弹出"时判定，开着时的 refresh
+  // 重算不再触发；未达标 = 工作日且完成量低于目标 −10% 容差，与工时账户同口径）
+  await listen<{ date: string }>(SUMMARY_SHOW_EVENT, async (e) => {
+    await load(e.payload.date);
+    const v = summary.value;
+    if (v && v.workday && v.total_minutes < v.target_minutes * 0.9) {
+      void emitTo("pet", PET_MILESTONE_EVENT, { kind: "failed" });
+    }
+  });
   await listen(SUMMARY_REFRESH_EVENT, () => void load());
   // 关闭 = 隐藏（与大小看板同一窗口关闭语义；完整语义归工单 14）
   await win.onCloseRequested(async (e) => {

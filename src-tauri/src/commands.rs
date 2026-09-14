@@ -251,8 +251,16 @@ pub fn should_auto_open_main_board(
     AllocationService::should_auto_open(&conn, state.clock.as_ref(), work_mode, manual)
 }
 
-/// 再见：跳箱动画播完后退出整个应用（关闭全部窗口；托盘退出（工单 14）走同一通道）。
+/// 再见：退出整个应用（工单 17 起桌宠窗口先淡出再调这里；托盘退出（工单 14）走同一通道）。
 #[tauri::command]
 pub fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+/// 今日任务是否全部完成（工单 20 庆祝触发源）：小看板每次汇报后查询，false→true
+/// 跃迁时让桌宠演一次庆祝 jumping。
+#[tauri::command]
+pub fn today_tasks_all_complete(state: State<'_, AppState>) -> Result<bool, PlanError> {
+    let conn = state.db.lock().unwrap();
+    AllocationService::today_all_complete(&conn, state.clock.as_ref())
 }

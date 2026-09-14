@@ -71,6 +71,7 @@ pub fn run() {
             commands::report_percent,
             commands::correct_total_progress,
             commands::should_auto_open_main_board,
+            commands::today_tasks_all_complete,
             commands::is_work_time,
             commands::save_settings,
             commands::get_next_window_start,

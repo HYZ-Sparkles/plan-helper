@@ -253,13 +253,14 @@ import {
   getMiniBoard,
   reportPercent,
   setCurrentTask,
+  todayTasksAllComplete,
   undoSubgoal,
   type MiniBoardView,
 } from "../lib/api";
 import { hoursFromMinutes, hoursLabel, carryLabel, planErrorMessage } from "../lib/labels";
 import { isValidPercentValue } from "../lib/validation";
 import { SUMMARY_REFRESH_EVENT } from "../lib/summary";
-import { MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT } from "../lib/events";
+import { MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, PET_MILESTONE_EVENT } from "../lib/events";
 
 const win = getCurrentWebviewWindow();
 const view = ref<MiniBoardView | null>(null);
@@ -359,8 +360,10 @@ async function load() {
 }
 
 /** 统一动作通道：busy 互斥 + 失败 toast，成功后重载（视图从日志派生，读到即最新）。
- *  同时唤醒今日总结（若正开着，重取最新账——内容实时重算，工单 11）。 */
-async function act(action: () => Promise<void>, note?: string) {
+ *  同时唤醒今日总结（若正开着，重取最新账——内容实时重算，工单 11）与庆祝跃迁检查
+ *  （工单 20）。milestone = 推进型动作（子目标勾选 / +X% 增量）时向桌宠发 review；
+ *  撤销/修正等"往回改"不发（PetActionPolicy）。 */
+async function act(action: () => Promise<void>, note?: string, milestone?: "review") {
   if (busy.value) return;
   busy.value = true;
   try {
@@ -368,6 +371,8 @@ async function act(action: () => Promise<void>, note?: string) {
     if (note) flash(note);
     await load();
     void emitTo("daily-summary", SUMMARY_REFRESH_EVENT);
+    if (milestone) void emitTo("pet", PET_MILESTONE_EVENT, { kind: milestone });
+    void checkCelebrate();
   } catch (err) {
     flash(planErrorMessage(err as { kind?: string }));
   } finally {
@@ -375,15 +380,31 @@ async function act(action: () => Promise<void>, note?: string) {
   }
 }
 
-const complete = (id: number) => act(() => completeSubgoal(id));
+/* ---- 工单 20 庆祝跃迁：今日任务全部完成的 false→true 时刻发一次 celebrate ---- */
 
-/** 撤销最近一个已完成子目标（toast 提示进度已重算） */
+/** 上次检查时是否已"今日任务全部完成"（会话级基线，mount 后首查只置位不发） */
+let celebrated = false;
+
+/** 汇报/撤销/换任务后复查：跃迁进全完成才发（连续汇报不重复庆祝；撤销后再完成会再发） */
+async function checkCelebrate() {
+  try {
+    const all = await todayTasksAllComplete();
+    if (all && !celebrated) void emitTo("pet", PET_MILESTONE_EVENT, { kind: "celebrate" });
+    celebrated = all;
+  } catch {
+    /* 后端不可达：庆祝静默跳过 */
+  }
+}
+
+const complete = (id: number) => act(() => completeSubgoal(id), undefined, "review");
+
+/** 撤销最近一个已完成子目标（toast 提示进度已重算；往回改不触发 review） */
 function undoLast() {
   const s = lastCompleted.value;
   if (s) act(() => undoSubgoal(s.id), `已撤销「${s.name}」的完成，进度已重算`);
 }
 
-const report = () => act(() => reportPercent(current.value!.task_id, step.value));
+const report = () => act(() => reportPercent(current.value!.task_id, step.value), undefined, "review");
 
 /** 选定更换任务：服务层校验今日列表归属，成功后收起选择器 */
 async function pick(taskId: number) {
@@ -413,6 +434,12 @@ function commitStep() {
 
 onMounted(async () => {
   await load();
+  // 庆祝基线（工单 20）：启动时已全完成 → 只置位不庆祝（庆祝只属于"完成的那一刻"）
+  try {
+    celebrated = await todayTasksAllComplete();
+  } catch {
+    /* 后端不可达：庆祝静默跳过 */
+  }
   // 大面板确认分配后刷新（MainBoard 确认时先发事件；显隐与计时归 PetWindow）
   await listen(MINI_BOARD_REFRESH_EVENT, load);
   // 被亮出（点击桌宠唤起 / 事件亮相）：回任务视图干净状态 + 启动自动隐藏计时
