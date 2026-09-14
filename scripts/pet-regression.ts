@@ -26,6 +26,8 @@ import {
   reviewSteps,
 } from "../src/lib/pet/actions";
 import { classifyDrag } from "../src/lib/pet/dragGesture";
+import { lookIndex } from "../src/lib/pet/gaze";
+import { lookCell } from "../src/lib/pet/animations";
 
 /* ---- rAF 桩：手动推进，全确定性 ---- */
 let rafQ: Array<(t: number) => void> = [];
@@ -392,6 +394,34 @@ check("单样本 → null", classifyDrag([{ t: 100, x: 100, y: 100 }], 120) === 
 // 情况：拖拽反馈循环动作构建。正确：用户锁 + 单循环步（即刻稳态 → 方向实时可替换）。
 const dl = dragLoopAction("running-left");
 check("拖拽反馈 = 用户锁循环", dl.lock && dl.steps.length === 1 && dl.steps[0].anim === "running-left" && (dl.steps[0].loop ?? false));
+
+/* ================= gaze：16 向方位分档与死区（工单 21） ================= */
+console.log("\n[gaze]");
+// 情况：四正方向（dx/dy 为物理像素差，y 向下）。正确：上 0、右 4、下 8、左 12。
+check(
+  "四正方向分档（上0/右4/下8/左12）",
+  lookIndex(0, -100, 64) === 0 &&
+    lookIndex(100, 0, 64) === 4 &&
+    lookIndex(0, 100, 64) === 8 &&
+    lookIndex(-100, 0, 64) === 12,
+);
+// 情况：对角 45°。正确：右上 2、左下 10。
+check(
+  "对角 45° 分档",
+  lookIndex(70.7, -70.7, 64) === 2 && lookIndex(-70.7, 70.7, 64) === 10,
+);
+// 情况：11.25° 分档边界（0 与 1 档的分界角）。正确：11.09° → 0 档、11.54° → 1 档。
+check("22.5° 半角边界", lookIndex(19.6, -100, 64) === 0 && lookIndex(20.4, -100, 64) === 1);
+// 情况：接近正上方的负角（-3°）。正确：归一到 357° → round 到 16 取模回 0 档（最近方向）。
+check("负角归一与取模回绕", lookIndex(-5.2, -100, 64) === 0);
+// 情况：指针距中心不足死区（压在桌宠身上）。正确：null（正前方死区回落 idle）。
+check("死区内 → null", lookIndex(0, -63, 64) === null && lookIndex(30, -30, 64) === null);
+check("死区外起算", lookIndex(0, -65, 64) === 0);
+// 情况：环视序号 → 图集格。正确：0–7 在行 9、8–15 在行 10、列 = 序号模 8。
+check(
+  "lookCell 行列映射",
+  lookCell(0).row === 9 && lookCell(7).col === 7 && lookCell(8).row === 10 && lookCell(15).col === 7,
+);
 
 /* ================= 汇总 ================= */
 console.log(failed === 0 ? "\n全部通过" : `\n${failed} 项失败`);

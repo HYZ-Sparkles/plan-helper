@@ -74,6 +74,12 @@ export function todayTasksAllComplete(): Promise<boolean> {
   return invoke<boolean>("today_tasks_all_complete");
 }
 
+/** 全局指针位置（工单 21 v2 环视跟随）：物理像素 [x, y]；非 Windows / 系统取不到
+ *  返回 null（桌宠静默回落 idle）。Rust 侧 Option<(i32,i32)> 序列化为元组数组 */
+export function getCursorPos(): Promise<[number, number] | null> {
+  return invoke<[number, number] | null>("get_cursor_pos");
+}
+
 /* ---- 计划领域（工单 02+）---- */
 
 /** 优先级枚举（CONTEXT「优先级」） */

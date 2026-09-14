@@ -55,12 +55,13 @@ import {
   type RoamPlan,
 } from "../lib/pet/actions";
 import { classifyDrag, type DragFeedback, type DragSample } from "../lib/pet/dragGesture";
+import { GAZE_DEADZONE_PX, lookIndex } from "../lib/pet/gaze";
 import { DEFAULT_SKIN, type SkinDef } from "../lib/pet/skins";
 import { MENU_ACTION_EVENT, MENU_BLUR_EVENT, MENU_EXPIRE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
 import { MAIN_BOARD_REOPEN_EVENT, MAIN_BOARD_VISIBILITY_EVENT, MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, PET_MILESTONE_EVENT, SETTINGS_CHANGED_EVENT, type MilestoneKind } from "../lib/events";
-import { exitApp, getDailySummaryStatus, getMiniBoard, getNextWindowStart, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
+import { exitApp, getCursorPos, getDailySummaryStatus, getMiniBoard, getNextWindowStart, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
 /** 判定为"点击"的最大位移（逻辑像素，小于它不算拖拽） */
 const CLICK_SLOP_PX = 4;
@@ -211,6 +212,7 @@ function applyChassis(flick = false) {
  *  （checkAutoOpen 在此才调用），落位前桌宠停在挥手末帧等检测结果。 */
 async function onStartupSettled() {
   phase.value = "normal";
+  syncGazePoll();
   if (mode.value === "rest") {
     applyChassis();
     armRandom();
@@ -256,6 +258,7 @@ async function switchMode() {
   if (mode.value === "rest") {
     mode.value = "work";
     randomGen++; // 作废随机动作计时（工作模式不触发）
+    syncGazePoll(); // 工作模式不跟视（running 常驻）
     void restoreMiniBoard();
     await checkAutoOpen(true); // 手动切入 = 主动加班：非工作日也弹大面板选任务
     applyChassis(true);
@@ -264,6 +267,7 @@ async function switchMode() {
     randomGen++;
     boardAttached = false;
     void hideWindow("mini-board"); // 休息即不工作（67）
+    syncGazePoll(); // 休息模式 + v2 形象才轮询环视
     applyChassis(true);
     armRandom();
   }
@@ -443,8 +447,55 @@ function goodbye() {
   randomGen++;
   summaryGen++;
   windowStartGen++;
+  syncGazePoll(); // 告别期不再环视
   fadingOut.value = true; // CSS opacity 过渡（280ms）
   window.setTimeout(() => void exitApp(), GOODBYE_FADE_MS);
+}
+
+/* ---- v2 环视跟随（21，CodexPetContract）：休息模式视线跟随指针，正前方死区回落
+   ---- idle；v1 形象无环视行自动静默降级（不轮询不报错）；随机移动/一次性演出/
+   ---- waiting/拖拽反馈期间挂起（sprite.anim 不是 idle 即挂起，跑完自然恢复） ---- */
+
+/** 当前环视姿势（0–15 顺时针、0 = 正上方；null = 死区/挂起 → 渲染回 anim/frame） */
+const gazeIdx = ref<number | null>(null);
+/** 轮询句柄：条件变化起停，clear 后 gazeIdx 立即回落 */
+let gazeTimer: ReturnType<typeof setInterval> | undefined;
+
+/** 起停：休息模式 + v2 形象 + 正常态才轮询（30Hz 读全局指针——桌宠窗口只有 96×104，
+ *  指针大多在窗外，事件收不到，只能轮询；每次一问极小载荷） */
+function syncGazePoll() {
+  const on = mode.value === "rest" && skin.value.spriteVersion === 2 && phase.value === "normal";
+  if (on && gazeTimer === undefined) {
+    gazeTimer = setInterval(() => void pollGaze(), 33);
+  } else if (!on && gazeTimer !== undefined) {
+    clearInterval(gazeTimer);
+    gazeTimer = undefined;
+    gazeIdx.value = null; // 条件失效立即回落（工作模式/v1/告别），不等下一拍
+  }
+}
+
+/** 一拍：条件复查（拖拽中/非常驻 idle 挂起）→ 读全局指针 → 相对桌宠中心的方位分档 */
+async function pollGaze() {
+  if (!mover || drag || sprite.anim !== "idle") {
+    gazeIdx.value = null;
+    return;
+  }
+  try {
+    const cur = await getCursorPos();
+    if (!cur) {
+      gazeIdx.value = null;
+      return;
+    }
+    const p = mover.position();
+    const s = mover.size();
+    gazeIdx.value = lookIndex(
+      cur[0] - (p.x + s.width / 2),
+      cur[1] - (p.y + s.height / 2),
+      GAZE_DEADZONE_PX * (mover.scaleFactor?.() ?? 1),
+    );
+  } catch {
+    gazeIdx.value = null; // 后端不可达：静默回落
+  }
 }
 
 /* ---- 今日总结触发（工单 11，DailySummaryTrigger）：最晚窗口结束自动弹 / 次日首开补登 ---- */
@@ -739,7 +790,7 @@ async function showRestHint(seq: number) {
     @pointerup="onPointerUp"
     @pointercancel="onPointerUp"
   >
-    <PetSprite :anim="sprite.anim" :frame="sprite.frame" :sheet="skin.sheet" :fade-signal="sprite.flick" />
+    <PetSprite :anim="sprite.anim" :frame="sprite.frame" :sheet="skin.sheet" :look="gazeIdx" :fade-signal="sprite.flick" />
   </div>
 </template>
 

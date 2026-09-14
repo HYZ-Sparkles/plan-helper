@@ -264,3 +264,30 @@ pub fn today_tasks_all_complete(state: State<'_, AppState>) -> Result<bool, Plan
     let conn = state.db.lock().unwrap();
     AllocationService::today_all_complete(&conn, state.clock.as_ref())
 }
+
+/// 全局指针位置（工单 21 v2 环视跟随）：物理像素元组；非 Windows 或系统取不到
+/// 返回 null（前端静默回落 idle，不报错）。
+#[tauri::command]
+pub fn get_cursor_pos() -> Option<(i32, i32)> {
+    cursor_pos()
+}
+
+/// Win32 GetCursorPos（user32 原生 FFI，免引 windows crate）
+#[cfg(windows)]
+fn cursor_pos() -> Option<(i32, i32)> {
+    #[repr(C)]
+    struct Point {
+        x: i32,
+        y: i32,
+    }
+    extern "system" {
+        fn GetCursorPos(point: *mut Point) -> i32;
+    }
+    let mut p = Point { x: 0, y: 0 };
+    unsafe { (GetCursorPos(&mut p) != 0).then_some((p.x, p.y)) }
+}
+
+#[cfg(not(windows))]
+fn cursor_pos() -> Option<(i32, i32)> {
+    None
+}
