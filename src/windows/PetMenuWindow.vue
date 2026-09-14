@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 桌宠浮层窗（工单 08，PetMenuActions）：菜单（控制面板 / 切换模式 / 再见）+
- * 提示气泡（休息模式左键「右键才是菜单喵」，2026-08-30 反馈）两种形态。
+ * 提示气泡（休息模式左键「右键打开菜单」，2026-08-30 反馈；工单 17 去形象专属措辞）两种形态。
  * **显隐唯一持有者是 PetWindow**（2026-08-30 重构，与拖拽耦合状态同源思想）：本窗
  * 只报告回执——失焦（tauri://blur）/ 气泡到点，各带亮出代数 seq；是否真藏由桌宠按
  * 代数裁决（被换形态顶替的回执落败）。本窗永不自行 hide，形态切换只发生在事件驱动
@@ -51,7 +51,7 @@ const items = computed(() => [
  *  形态切换，桌宠按代数隐藏后 hint 留待下次亮出时重置，杜绝菜单卡闪现） */
 function flashHint(p: PetMenuSeqPayload) {
   seq = p.seq;
-  hint.value = "右键才是菜单喵";
+  hint.value = "右键打开菜单";
   clearTimeout(hintTimer);
   const expired = p.seq;
   hintTimer = setTimeout(

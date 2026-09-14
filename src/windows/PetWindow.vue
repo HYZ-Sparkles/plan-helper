@@ -1,18 +1,20 @@
 <script setup lang="ts">
 /**
- * 桌宠窗口（工单 08 主接线、09 交互编排、16 起 codex 契约词汇表）：启动序列 →
- * 正常态（菜单 / 模式切换 / 再见 / 拖拽 / 随机动作）。
+ * 桌宠窗口（工单 08 主接线、09 交互编排、16 起 codex 契约词汇表、17 生命周期重铸）：
+ * 启动序列 → 正常态（菜单 / 模式切换 / 再见 / 拖拽 / 随机动作）。
  *
  * - 启动序列 = waving 挥手（约 0.7s，ADR-0010）：期间点击/菜单/拖拽全部忽略（比
- *   "动画播放中"更严格）；播完按初始模式落常驻（工单 17 补"面板将弹 → waiting"分流）
+ *   "动画播放中"更严格）；播完按初始模式**三分流**——工作且大面板即将自动弹出 →
+ *   直接 waiting，工作 → running，休息 → idle；大面板在 waving 播完前不弹
  * - 初始模式按工作时间判定（isWorkTime：工作日 + 时间窗口内 = 工作，否则休息）；
  *   工作常驻 running（陪你伏案）、休息常驻 idle（语义翻转自 Sleep Idle，ADR-0010）
  * - 模式切换（菜单项）：硬切常驻 + flick 快速淡出淡入兜底（codex 无入睡/醒来过渡）；
  *   小看板显隐联动（休息隐藏/工作恢复）
  * - 随机动作（19，PetRandomAction）：休息模式距上一次（用户或随机）动作结束 300s、
  *   50% 概率触发；系统动作不占锁、仅稳态发起、可被用户动作抢占（引擎裁决）
- * - 再见（菜单「再见」/ 托盘「退出」共用通道，工单 14/17）：直接退出（淡出在工单 17
- *   落地）；占用重试与告别期静默保证常驻托盘入口永远有效
+ * - 再见（菜单「再见」/ 托盘「退出」共用通道，工单 14/17）：桌宠窗口直接淡出
+ *   （280ms CSS 过渡，无告别仪式）后 exitApp 关闭全部窗口并退进程；双入口去重、
+ *   告别期静默保证常驻托盘入口永远有效
  * - 小看板按需显隐（2026-08-30 反馈，MiniBoardVisibility）：平时隐藏，左键点击桌宠
  *   唤起/收起（休息模式不响应，67），事件亮相（分配确认/切回工作/启动续接）自动亮出；
  *   每次亮出发 mini-board:show 让看板重置视图并启动 10s 自动隐藏计时（悬停暂停，
@@ -58,6 +60,8 @@ const sprite = reactive<EngineState>({ anim: "idle", frame: 0, locked: false, bu
 const phase = ref<"startup" | "normal" | "goodbye">("startup");
 /** 当前模式：初始值在 onMounted 里按工作时间判定覆写（后端不可达时保持默认工作） */
 const mode = ref<PetMode>("work");
+/** 告别淡出中（模板 class：opacity → 0） */
+const fadingOut = ref(false);
 /** 当前形象（工单 22 接设置页切换与持久化；本单先取注册表默认） */
 const skin = ref<SkinDef>(DEFAULT_SKIN);
 /** 浮层（菜单/提示气泡）代数：每次亮出/按下预定自增。pet-menu 的失焦/到点回执携带
@@ -118,7 +122,9 @@ onMounted(async () => {
   await listen<{ seq: number }>(MENU_BLUR_EVENT, (e) => onFloatGone(e.payload.seq));
   await listen<{ seq: number }>(MENU_EXPIRE_EVENT, (e) => onFloatGone(e.payload.seq));
   // 大面板确认（06）会点亮小看板：工作模式按刚性组合就位（亮出即启动自动隐藏计时），
-  // 休息模式坚持隐藏（67 休息即不工作——显隐跟着模式走，2026-08-29 反馈）
+  // 休息模式坚持隐藏（67 休息即不工作——显隐跟着模式走，2026-08-29 反馈）。
+  // 确认同时会关掉大面板：重落常驻（waiting → 该模式常驻，工单 20 补齐对面板关闭的
+  // 事件化即时响应）
   await listen(MINI_BOARD_REFRESH_EVENT, () => {
     if (mode.value === "rest") {
       boardAttached = false;
@@ -126,6 +132,7 @@ onMounted(async () => {
     } else {
       void attachBoardRigidly();
     }
+    void applyChassis();
   });
   // 小看板请求收起（✕ / 自动隐藏到点，2026-08-30 反馈）：显隐唯一持有者执行隐藏并解除挂靠
   await listen(MINI_BOARD_DISMISS_EVENT, async () => {
@@ -156,24 +163,38 @@ async function syncBoardAtStartup() {
   }
 }
 
-/** 落常驻：按当下状态（模式）请求常驻循环。正在播一次性动作时被引擎拒绝——其
- *  onSettle 会再调一次，届时自然落到最新状态（条件变化不留下过期收尾）。 */
-function applyChassis() {
+/** 落常驻：按当下状态请求常驻循环（大面板开着 = waiting——工单 20 补面板关闭事件
+ *  的即时回常驻，本单在每次落常驻时查实时可见性）。常驻未变不重排（循环从头会闪一帧）；
+ *  正在播一次性动作时被引擎拒绝——其 onSettle 会再调一次，届时自然落到最新状态。
+ *  flick = 模式硬切的淡出淡入兜底（换常驻来自不同动作族、无过渡帧可衔接）。 */
+async function applyChassis(flick = false) {
   if (phase.value !== "normal") return;
-  engine.request(chassisAction(chassisAnim(mode.value, false)));
+  const target = chassisAnim(mode.value, await mainBoardVisible());
+  if (sprite.anim === target && engine.state().busy) return; // 常驻已在播且未变
+  engine.request(chassisAction(target, flick));
 }
 
-/** 启动序列完成：进入正常态并按初始模式分流（工单 17：工作且大面板即将自动弹出 →
- *  直接 waiting；本单先落 running/idle 两支）。 */
-function onStartupSettled() {
+/** 大面板当前是否可见（waiting 的触发源；任何打开路径都反映到窗口可见性上） */
+async function mainBoardVisible(): Promise<boolean> {
+  try {
+    return (await WebviewWindow.getByLabel("main-board"))?.isVisible() ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** 启动序列完成：进入正常态并按初始模式三分流（工单 17）——工作且大面板即将自动
+ *  弹出 → 直接 waiting；工作 → running；休息 → idle。大面板在 waving 播完前不弹
+ *  （checkAutoOpen 在此才调用），落位前桌宠停在挥手末帧等检测结果。 */
+async function onStartupSettled() {
   phase.value = "normal";
   if (mode.value === "rest") {
-    applyChassis();
+    await applyChassis();
     armRandom();
     return;
   }
-  void checkAutoOpen(false);
-  applyChassis();
+  await checkAutoOpen(false);
+  await applyChassis();
 }
 
 /** AutoOpenMainBoard 检测：工作模式 + 今日未分配 → 弹大面板（沿用控制面板的重开语义带回数据）。
@@ -200,24 +221,26 @@ function onMenuAction(action: MenuAction) {
     return;
   }
   if (engine.state().locked || phase.value !== "normal") return; // 防御：菜单禁用外的兜底
-  if (action === "toggle-mode") switchMode();
+  if (action === "toggle-mode") void switchMode();
   if (action === "goodbye") goodbye();
 }
 
-/** 模式切换（用户动作）：硬切常驻 + flick 兜底；小看板显隐联动（休息隐藏/工作恢复） */
-function switchMode() {
+/** 模式切换（用户动作）：硬切常驻 + flick 兜底（codex 无入睡/醒来过渡动画）；
+ *  小看板显隐联动（休息隐藏/工作恢复）。切入工作先做 AutoOpen 检测再落常驻——
+ *  面板将弹则直接落 waiting（三分流的手动加班支）。 */
+async function switchMode() {
   if (mode.value === "rest") {
     mode.value = "work";
     randomGen++; // 作废随机动作计时（工作模式不触发）
-    engine.request(chassisAction("running", true));
     void restoreMiniBoard();
-    void checkAutoOpen(true); // 手动切入 = 主动加班：非工作日也弹大面板选任务
+    await checkAutoOpen(true); // 手动切入 = 主动加班：非工作日也弹大面板选任务
+    await applyChassis(true);
   } else {
     mode.value = "rest";
     randomGen++;
     boardAttached = false;
     void hideWindow("mini-board"); // 休息即不工作（67）
-    engine.request(chassisAction("idle", true));
+    await applyChassis(true);
     armRandom();
   }
 }
@@ -319,16 +342,21 @@ function applyChassisAfterRandom() {
   armRandom();
 }
 
-/** 再见：退出整个应用（关闭全部窗口）。菜单「再见」与托盘「退出」（工单 14）共用：
- *  已在告别中忽略（双入口去重）；告别期间一切自动触发静默（总结/开窗定时作废，
- *  防止告别的最后一秒弹出总结窗并把"已弹"登记进库）。窗口淡出在工单 17 落地。 */
+/** 告别淡出时长：CSS 过渡 280ms + 余量（淡完才关窗，不闪黑框） */
+const GOODBYE_FADE_MS = 300;
+/** 再见：桌宠窗口直接淡出（ADR-0010：codex 契约无告别动作、不做告别仪式）→ 淡完
+ *  exitApp 关闭全部窗口并退进程。菜单「再见」与托盘「退出」（工单 14）共用这一通道
+ *  （两条退出路径的行为等价性由此保证）：已在告别中忽略（双入口去重）；淡出不依赖
+ *  引擎（任何动画状态下都能立即开始，取代旧跳箱动画的占锁重试）；告别期间一切自动
+ *  触发静默（总结/开窗定时作废，防止告别的最后一秒弹出总结窗并把"已弹"登记进库）。 */
 function goodbye() {
   if (phase.value === "goodbye") return;
   phase.value = "goodbye";
   randomGen++;
   summaryGen++;
   windowStartGen++;
-  void exitApp();
+  fadingOut.value = true; // CSS opacity 过渡（280ms）
+  window.setTimeout(() => void exitApp(), GOODBYE_FADE_MS);
 }
 
 /* ---- 今日总结触发（工单 11，DailySummaryTrigger）：最晚窗口结束自动弹 / 次日首开补登 ---- */
@@ -582,7 +610,7 @@ async function showRestHint(seq: number) {
        左键点击唤/收小看板、右键点击菜单、右键拖动移动（2026-08-30 反馈）；原生右键菜单已在 main.ts 全局静默 -->
   <div
     class="pet-shell"
-    :class="{ frozen: interactionsOff() }"
+    :class="{ frozen: interactionsOff(), goodbye: fadingOut }"
     @pointerdown="onPointerDown"
     @pointermove="onPointerMove"
     @pointerup="onPointerUp"
@@ -604,5 +632,11 @@ async function showRestHint(seq: number) {
 
 .frozen {
   pointer-events: none; /* 启动序列/告别期间：点击、拖拽全部忽略 */
+}
+
+/* 告别淡出（工单 17）：桌宠窗口直接淡出后关闭全部窗口，无告别仪式 */
+.pet-shell.goodbye {
+  opacity: 0;
+  transition: opacity 280ms ease-out;
 }
 </style>
