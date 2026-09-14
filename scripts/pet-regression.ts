@@ -19,11 +19,14 @@ import { ANIMATIONS } from "../src/lib/pet/animations";
 import {
   chassisAnim,
   dragLoopAction,
+  failedSteps,
   jumpSteps,
   pickRandomKind,
   planReturn,
   planRoam,
   reviewSteps,
+  STATE_REPEATS,
+  wavingSteps,
 } from "../src/lib/pet/actions";
 import { classifyDrag } from "../src/lib/pet/dragGesture";
 import { lookIndex } from "../src/lib/pet/gaze";
@@ -76,9 +79,10 @@ function simMover(startX = 100) {
 console.log("\n[contract]");
 // 情况：契约时长表（animation-rows.md）逐动作核对。正确：帧数与时长逐项一致、
 // 行号 0–8 连续、前缀和末项 = 行总时长。
+// idle 用应用实际 calm loop（codex-rs pets/model.rs 断言，6× 参考表；2026-09-14 二次校准）
 check(
-  "idle = 6 帧 [280,110,110,140,140,320]",
-  ANIMATIONS.idle.durations.join(",") === "280,110,110,140,140,320" && ANIMATIONS.idle.row === 0,
+  "idle = 6 帧 calm loop [1680,660,660,840,840,1920]",
+  ANIMATIONS.idle.durations.join(",") === "1680,660,660,840,840,1920" && ANIMATIONS.idle.row === 0,
 );
 check(
   "running-right/left = 8 帧 120×7+220 且循环",
@@ -136,8 +140,8 @@ check("最近边优先：距上 5 < 距左 10 → 吸上", snapToEdges(10, 5, 96
 /* ================= engine：契约逐帧时长步进 ================= */
 console.log("\n[engine step]");
 {
-  // 情况：idle 循环（时长 280,110,110,140,140,320，一圈 1100ms）以 100ms 步进。
-  // 正确：帧边界落在契约前缀和上（280/390/500/640/780），过圈回 0。
+  // 情况：idle 循环（时长 1680,660,660,840,840,1920，一圈 6600ms）以 100ms 步进。
+  // 正确：帧边界落在契约前缀和上（1680/2340/3000/3840/4680），过圈回 0。
   const eng = new PetEngine(simMover().mover);
   eng.request({ lock: false, steps: [{ anim: "idle" }] });
   let total = 0;
@@ -149,25 +153,25 @@ console.log("\n[engine step]");
   // 注：引擎首 tick 是基线（dt=0，防动作发起瞬间的调度延迟跳变），elapsed 恒滞后
   // 一个步进——探针时刻按此校准。
   check(
-    "idle 帧边界按契约时长（0|1|2|3|4|5）",
-    at(100) === 0 && at(400) === 1 && at(500) === 2 && at(600) === 3 && at(800) === 4 && at(900) === 5,
+    "idle 帧边界按时长表（0|1|2|3|4|5）",
+    at(1600) === 0 && at(1800) === 1 && at(2500) === 2 && at(3100) === 3 && at(4000) === 4 && at(4800) === 5,
   );
-  check("idle 过圈回 0（1100ms）", at(1200) === 0 && at(1500) === 1);
+  check("idle 过圈回 0（6600ms）", at(6700) === 0 && at(8500) === 1);
 }
 {
-  // 情况：waving 一次性（700ms）播完。正确：动作结束（busy=false）、onSettle 恰好一次、
-  // 停在末帧。
+  // 情况：waving 状态一次性演出（700ms × 3 遍 = 2100ms，STATE_REPEATS——codex 应用
+  // "状态动画播 3 次后回 idle"的节奏）。正确：播完动作结束（busy=false）、onSettle 恰好一次。
   const eng = new PetEngine(simMover().mover);
   let settles = 0;
-  eng.request({ lock: true, steps: [{ anim: "waving" }], onSettle: () => settles++ });
-  flush(6, 100); // 600ms < 700：仍在播
-  check("waving 600ms 仍在播且锁住", eng.state().busy && eng.state().locked);
-  flush(2, 100); // 800ms ≥ 700：播完
-  check("waving 700ms 播完进稳态", settles === 1 && !eng.state().busy && !eng.state().locked);
+  eng.request({ lock: true, steps: wavingSteps(), onSettle: () => settles++ });
+  flush(20, 100); // 2000ms < 2100：仍在第三遍
+  check("waving 2000ms 仍在播且锁住", eng.state().busy && eng.state().locked);
+  flush(2, 100); // 2200ms ≥ 2100：播完
+  check("waving 三遍（2100ms）播完进稳态", settles === 1 && !eng.state().busy && !eng.state().locked);
 }
 {
-  // 情况：review 业务演出 = 契约圈（1030ms）× 2 遍 ≈ 2.06s。正确：第二圈从头播帧、
-  // 2060ms 播完结束，不会提前也不会多播。
+  // 情况：review 业务演出 = 契约圈（1030ms）× 3 遍 = 3090ms（STATE_REPEATS）。正确：
+  // 每圈从头播帧、3090ms 播完结束，不会提前也不会多播。
   const eng = new PetEngine(simMover().mover);
   let settles = 0;
   eng.request({ lock: false, steps: reviewSteps(), onSettle: () => settles++ });
@@ -175,8 +179,10 @@ console.log("\n[engine step]");
   check("review 1000ms 仍在第一圈", eng.state().busy && eng.state().frame === 5);
   flush(2, 100); // 1200ms：第二圈已回帧 0
   check("review 第二圈从头播", eng.state().frame === 0);
-  flush(10, 100); // 2200ms ≥ 2060：播完
-  check("review 两圈播完结束", settles === 1 && !eng.state().busy);
+  flush(9, 100); // 2100ms：第三圈中
+  check("review 第三圈仍在播", eng.state().busy);
+  flush(11, 100); // 3200ms ≥ 3090：播完
+  check("review 三圈播完结束", settles === 1 && !eng.state().busy);
 }
 
 /* ================= engine：freeze / unfreeze ================= */
@@ -399,6 +405,15 @@ check("单样本 → null", classifyDrag([{ t: 100, x: 100, y: 100 }], 120) === 
 // 情况：拖拽反馈循环动作构建。正确：用户锁 + 单循环步（即刻稳态 → 方向实时可替换）。
 const dl = dragLoopAction("running-left");
 check("拖拽反馈 = 用户锁循环", dl.lock && dl.steps.length === 1 && dl.steps[0].anim === "running-left" && (dl.steps[0].loop ?? false));
+
+// 情况：状态一次性动作的遍数 = 3（codex 应用节奏，2026-09-14 二次校准）。正确：
+// waving/jumping/failed/review 构建都带 repeats 3（≈2.1s / 2.52s / 3.66s / 3.09s）。
+check(
+  "状态一次性动作 3 遍（STATE_REPEATS）",
+  STATE_REPEATS === 3 &&
+    wavingSteps()[0].repeats === 3 && jumpSteps()[0].repeats === 3 &&
+    failedSteps()[0].repeats === 3 && reviewSteps()[0].repeats === 3,
+);
 
 /* ================= gaze：16 向分档、死区与激活半径（工单 21；2026-09-14 激活半径修订） ================= */
 console.log("\n[gaze]");

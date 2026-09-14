@@ -41,3 +41,4 @@
 - **内置形象 9 → 7**：Toothless、咕咚 删除（图效果不好）；邦德·福杰保留但**忽略环视**（v2 转向效果不好）——环视能力不再只由 spriteVersion 决定（注册表 `gazeIgnored` 标记，`skinCanGaze` 裁决）。
 - **环视改激活半径制**：指针进入桌宠约 240 逻辑像素内才跟视（超出回 idle——安静不注目、靠近才互动）；保留正中死区（指针压在桌宠身上方向无意义）。
 - **渲染弃用 `image-rendering: pixelated`**（Oreo 像素风的遗产）：codex 素材为带抗锯齿的绘画风，最近邻在 ÷2 缩放下逐帧抽取不同像素行、轮廓忽隐忽现（用户反馈「动作帧突发变大变小」）；改浏览器平滑插值，窗口维持 96×104。
+- **帧时序按 OpenAI codex-rs 源码二次校准**（`tui/src/pets/model.rs`）：idle 用应用实际 **calm loop** `[1680,660,660,840,840,1920]`（6.6s 一圈 = 参考表的 6 倍——参考表〔hatch-pet 技能 animation-rows.md〕只对自制宠物包有效）；其余动作每帧时长与参考表一致；**状态一次性动画播 3 遍后落回 idle**（waving ≈2.1s / review ≈3.1s / failed ≈3.7s / jumping ≈2.5s）。工作 running / 面板 waiting 常驻循环维持本 ADR 的业务绑定不自动回落（原版连 running 也是 3 遍回 idle，我们的常驻语义是既定决策）。

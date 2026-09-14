@@ -38,9 +38,10 @@ export function pickRandomKind(r: number): RandomKind {
   return r < 0.5 ? "jump" : "roam";
 }
 
-/** 随机跳跃（也承载业务"今日任务全部完成"庆祝，工单 20——共用动作、触发语义不同） */
+/** 随机跳跃（也承载业务"今日任务全部完成"庆祝，工单 20——共用动作、触发语义不同）；
+ *  3 遍 ≈ 2.52s（STATE_REPEATS，同 codex 应用的状态动画节奏） */
 export function jumpSteps(): StepSpec[] {
-  return [{ anim: "jumping" }];
+  return [{ anim: "jumping", repeats: STATE_REPEATS }];
 }
 
 /** 自主移动单程距离（显示逻辑像素，随机区间）与边界边距（PetRandomAction） */
@@ -109,22 +110,29 @@ export function planReturn(
 
 /* ---- 业务里程碑（工单 20，PetActionPolicy 第 4 来源；系统动作不占锁） ---- */
 
-/** review 演出遍数：契约一圈 1030ms × 2 ≈ spec"约 2.4s"（整圈数取最接近档） */
-export const REVIEW_REPEATS = 2;
+/** 状态一次性动画的播放遍数：3（2026-09-14 二次校准，codex-rs `pets/model.rs` 的
+ *  app_state_animation 将主帧序列重复 3 次后落回 idle——"播放 3 次后平滑回到 idle"）。
+ *  引擎 repeats 承载：waving ≈ 2.1s、review ≈ 3.1s、failed ≈ 3.7s、jumping ≈ 2.52s。 */
+export const STATE_REPEATS = 3;
 
-/** review：小看板推进型汇报的即时反馈（修正/撤销等"往回改"不触发） */
+/** 启动挥手（工单 17）：3 遍 ≈ 2.1s，期间交互禁用 */
+export function wavingSteps(): StepSpec[] {
+  return [{ anim: "waving", repeats: STATE_REPEATS }];
+}
+
+/** review：小看板推进型汇报的即时反馈（修正/撤销等"往回改"不触发）；3 遍 ≈ 3.1s */
 export function reviewSteps(): StepSpec[] {
-  return [{ anim: "review", loop: false, repeats: REVIEW_REPEATS }];
+  return [{ anim: "review", loop: false, repeats: STATE_REPEATS }];
 }
 
-/** failed：今日总结弹出且当日未达标时演一次（契约一圈 1240ms ≈ "约 1.2s"） */
+/** failed：今日总结弹出且当日未达标时演一次；3 遍 ≈ 3.7s */
 export function failedSteps(): StepSpec[] {
-  return [{ anim: "failed" }];
+  return [{ anim: "failed", repeats: STATE_REPEATS }];
 }
 
-/** 庆祝：今日任务全部完成时演一次（与休息随机跳跃共用 jumping） */
+/** 庆祝：今日任务全部完成时演一次（与休息随机跳跃共用 jumping）；3 遍 ≈ 2.52s */
 export function celebrateSteps(): StepSpec[] {
-  return [{ anim: "jumping" }];
+  return [{ anim: "jumping", repeats: STATE_REPEATS }];
 }
 
 /* ---- 拖拽反馈（工单 18，PetDragGesture）：拖起/竖直 = jumping、水平 = 专行跑 ---- */

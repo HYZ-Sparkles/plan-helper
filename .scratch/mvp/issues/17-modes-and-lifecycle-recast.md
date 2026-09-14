@@ -15,3 +15,5 @@
 - [x] 手动验收：双模式切换、启动三分流（改工作时间设置构造三场景）、双路径退出、气泡文案
 
 实现注记：三分流 = onStartupSettled 先 await checkAutoOpen(false) 再 applyChassis（落位前停在挥手末帧等检测结果）；模式硬切 + flickOnSwap 淡出淡入兜底；退出 = goodbye() 淡出（280ms CSS，不依赖引擎状态——取代旧跳箱的占锁重试）→ exitApp；旧机制保留：双入口去重、告别期静默、托盘绕 normal 守卫。
+
+二次校准（2026-09-14）：waving 启动序列改 3 遍 ≈2.1s（codex 应用状态动画「播 3 次后回 idle」节奏，STATE_REPEATS）；期间交互禁用语义不变、时长随遍数自然变长。

@@ -2,10 +2,14 @@
  * codex 桌宠契约动画数据（工单 16，CodexPetContract / ADR-0010）：
  * 单张雪碧图 = 固定 8 列网格、格 192×208（v1 图集 1536×1872 = 9 行、v2 1536×2288 = 11 行），
  * 显示时 ÷2 缩放（窗口 96×104）；第 0–8 行是 9 个标准动作、v2 第 9–10 行是 16 向环视
- * 静态姿势；每帧时长由契约硬性规定（awesome-codex-pet .agents/skills/hatch-pet-v1/
- * references/animation-rows.md）。形象只是皮肤（skins.ts 注册表），本文件对所有形象
- * 成立；替代 Oreo 的"fps + 非透明列段检测 + NUDGE/帧序/位移权重"验收调整管线
- * （契约无调参空间）。
+ * 静态姿势。每帧时长按 OpenAI codex 应用实际播放参数（2026-09-14 二次校准）：
+ * - idle 用应用内置的 **calm loop** `[1680,660,660,840,840,1920]`（codex-rs
+ *   `tui/src/pets/model.rs` 的 idle_animation 断言）——是参考表〔hatch-pet 技能的
+ *   animation-rows.md，面向自制宠物包〕的 6 倍慢速；
+ * - 其余动作与 model.rs / 参考表一致（120/140/150ms 每帧，末帧加长）。
+ * 状态一次性动画播 3 遍后回常驻（同 model.rs 的 app_state_animation），见 actions.ts
+ * STATE_REPEATS。形象只是皮肤（skins.ts 注册表），本文件对所有形象成立；替代 Oreo
+ * 的"fps + 非透明列段检测"验收调整管线（契约无调参空间）。
  */
 
 /** 契约动作名（= 图集行序 0–8；键序即行序，勿重排） */
@@ -35,7 +39,7 @@ export interface AnimationDef {
   row: number;
   /** 本行使用的列数（其余列契约保证全透明） */
   cols: number;
-  /** 每帧时长（ms，长 = cols；契约硬性规定） */
+  /** 每帧时长（ms，长 = cols；idle 为应用实际 calm loop，其余为契约参考表） */
   durations: number[];
   /** 天然是否循环（一次性演出可在 StepSpec 用 loop:false + repeats 截断） */
   loop: boolean;
@@ -50,11 +54,10 @@ function def(row: number, cols: number, loop: boolean, durations: number[]): Ani
   return { row, cols, loop, durations, cum };
 }
 
-/** 9 个标准动作（行 0–8）。时长表来自契约原文：
- *  idle 280,110,110,140,140,320；running-right/left 120×7+末帧 220；waving 140×3+280；
- *  jumping 140×4+280；failed 140×7+240；waiting 150×5+260；running 120×5+220；review 150×5+280 */
+/** 9 个标准动作（行 0–8）。时长：idle = 应用 calm loop（6.6s 一圈，codex-rs 实证）；
+ *  其余 = 参考表（120/140/150 每帧 + 末帧 220/240/260/280，与 model.rs 一致） */
 export const ANIMATIONS: Record<PetAnim, AnimationDef> = {
-  idle: def(0, 6, true, [280, 110, 110, 140, 140, 320]),
+  idle: def(0, 6, true, [1680, 660, 660, 840, 840, 1920]),
   "running-right": def(1, 8, true, [120, 120, 120, 120, 120, 120, 120, 220]),
   "running-left": def(2, 8, true, [120, 120, 120, 120, 120, 120, 120, 220]),
   waving: def(3, 4, false, [140, 140, 140, 280]),

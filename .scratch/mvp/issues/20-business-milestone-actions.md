@@ -24,3 +24,5 @@
 实现注记：waiting = MainBoard 亮出/隐藏发 main-board:visibility、PetWindow boardOpen 状态 + chassisAnim 裁决（自己亮面板直接置位）；review = MiniBoard 推进型动作（complete/report）成功后发 pet:milestone，撤销/修正/换任务不发，密集到达转 pending 播完补一次；failed = DailySummary show 事件装载后按服务端 met_target（±10% 容差带下沿，ledger::day_met 与工时账户同口径）判定；庆祝 = 后端 today_tasks_all_complete（今日已分配且非空且全部未删除 Completed，seam 五态覆盖）+ MiniBoard false→true 跃迁、mount 首查只置基态；afterOneShot 统一结算一切一次性演出（随机/里程碑/被拖拽抢占）。
 
 审查修正（code-review-zh）：Spec 轴——fireRandom 补 boardOpen 守卫（休息+面板开着随机不打断 waiting）；Standards——failed 容差判定后端化（DailySummaryView.met_target，前端不再自推 0.9 魔法数，seam_summary 补容差带/休息日用例）。
+
+二次校准（2026-09-14）：review/failed/庆祝与随机跳跃统一按 codex 应用的状态动画节奏播 3 遍（review ≈3.1s / failed ≈3.7s / jumping ≈2.5s，STATE_REPEATS 取代原 REVIEW_REPEATS=2 的凑时长方案）。
