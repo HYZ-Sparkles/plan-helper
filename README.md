@@ -110,7 +110,16 @@ npm run tauri dev
 ### 桌宠模块
 资源包存放在 "./resourses/awesome-codex-pet" 目录下，现采用 codex 桌宠融合。
 
-种类：偏向于可爱小动物类型，后续进行选择，个数5个差不多。
+种类：
+- Kiko--untko
+- salary-cat--Zuochunjie
+- bond-forger--legeling
+- doraemon--xueshi
+- gudong--rank
+- toothless--legeling
+- anya--chenxin-dlut
+- kid-goku--julianhuang
+- koukou-penguin--hoody
 
 用户动作对应桌宠动作(codex)
 - 启动应用：waving
@@ -118,7 +127,7 @@ npm run tauri dev
   - 常驻：idel
   - 每5min概率性(50%)触发随机动作：
     - 跳跃：jumping
-    - 自行移动：在桌面上小范围移动 running-right/running-left
+    - 自行移动：在桌面上小范围移动 running-right/running-left，一次移动到其他位置之后，下一次移动回来原位置
   - v2版本 跟着鼠标环视16方向
 - 工作模式：running
   - 小面板完成一个子目标或者推进了任务进度：review

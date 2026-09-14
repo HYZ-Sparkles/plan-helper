@@ -30,6 +30,12 @@
 - **验证**：`scripts/pet09-regression.ts`（esbuild bundle 后 node 直跑，rAF 手动推进）38 项断言全过——四约束边界、冻结/解冻（帧停、时长不累积、重锚定落原目标）、return 回程（含钳短场景）、rAF 叠加回归、锁矩阵、flick、4:3:3 边界、编排结构/翻转/回程、autoDirection；`npm run build`（vue-tsc）与 `cargo test` 全绿。
 - **验收方式**：`npm run tauri dev` 手动过清单——四条拖动边界（拖到任务栏/屏幕外/跨屏/贴边松手）、锁矩阵（拖后 Attack 播放中菜单三项禁用可查看、拖拽仍可用、Attack 完恢复）、随机动作（休息模式等 300s 或临时把 `RANDOM_INTERVAL_MS` 调小验证吃/跳/闲坐与回位、工作模式不触发）。
 
+**2026-09-13 spec 修订（[ADR-0010](../../../docs/adr/0010-codex-pet-replaces-oreo.md)）：本工单 Oreo 内容被取代**
+
+拖动改照抄 codex 原版手势：拖起 jumping → 140ms 滑窗主方向 running-right/left（反转实时跟切、竖直 jumping）→ 松手立即回常驻——"拖动保持当前帧 + 拖后 Attack"作废（freeze/unfreeze 仅保留给轴向模糊瞬间）。随机动作池只剩跳跃（300 秒间隔 50% 概率），吃/闲坐/Attack 编排删除；新增业务里程碑动作（waiting / review / failed / jumping 庆祝，spec 故事 62a–62c）。见 spec 与 ADR-0010；桌宠改造工单将重新切分，dragBounds / tauriMover / 锁矩阵等机制成果保留复用。
+
+> 同日更正（二次 grill 复议）：随机池定为**跳跃 + 自主小范围移动（1:1）**，非"只剩跳跃"。自主移动为 home / away 交替往返（跑出去留下、下次跑回，home 随拖拽重置）——引擎的位移插值 / return 回程 / autoDirection 机制正是为这类行为而建，直接复用。见 ADR-0010 修订节与 spec 故事 62。
+
 **2026-08-29 code-review（两轴：Standards + Spec）修订**
 
 （并行审查子代理因环境模型供应商未配置启动失败，两轴审查在主会话内完成——按 AGENTS.md 规范 + Fowler smell 基线与工单 9 条逐文件核对。）

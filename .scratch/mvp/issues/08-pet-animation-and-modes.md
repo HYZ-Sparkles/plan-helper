@@ -61,3 +61,7 @@
 - 反馈：启动时应先根据工作时间判定进入什么模式，再走对应动作——工作时间内启动 = 启动序列后进工作动画（4→5 睡眠）+ 未分配弹大面板；否则进休息模式。取代原"启动默认工作模式"。
 - 落地：`SettingsService::is_work_time`（工作日 && 窗口内；跨午夜窗口凌晨段归属窗口开始日，story 54 口径）+ 命令 `is_work_time` + 前端 `isWorkTime()`；PetWindow 启动时取初始模式（invoke 毫秒级、序列数秒，来得及落定），`onStartupSettled` 按模式分流——工作走原路径（AutoOpen 检测 + 700ms 转睡眠），休息直接从 7 Stand Idle 排站坐轮换、不弹面板。
 - 复用整理：周循环工作日判定从 AllocationService 私有方法上移为 `SettingsService::is_workday`（面板 workday 标记 / should_auto_open / is_work_time 三方共用）；seam_settings 补 2 测（默认窗口内外与休息日、多窗口 + 跨午夜今晚/凌晨段）。13 的日期例外与窗口开始触发在同一判定上叠加。
+
+**2026-09-13 spec 修订（[ADR-0010](../../../docs/adr/0010-codex-pet-replaces-oreo.md)）：本工单 Oreo 内容被取代**
+
+桌宠整体改向 codex 契约形象包：启动序列改 waving→落常驻、工作模式改 running 常驻（不再是 Sleep Idle）、模式切换硬切（无过渡动画）、「再见」改直接淡出、切帧管线按契约固定 8 列网格重写、窗口 64×64→96×104。见 spec（故事 61 / 63 / 68 / 69a 与 Implementation Decisions 桌宠条目）。桌宠改造工单将重新切分；本工单实施记录保留作引擎机制参考（动作锁 / flick / 位移插值 / 底部锚定等机制不变）。
