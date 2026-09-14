@@ -39,7 +39,8 @@ import PetSprite from "../components/PetSprite.vue";
 import { PetEngine, type EngineState, type PetMover } from "../lib/pet/engine";
 import { createTauriMover } from "../lib/pet/tauriMover";
 import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dragBounds";
-import { chassisAction, chassisAnim, jumpSteps, pickRandomKind, RANDOM_INTERVAL_MS } from "../lib/pet/actions";
+import { chassisAction, chassisAnim, dragLoopAction, jumpSteps, pickRandomKind, RANDOM_INTERVAL_MS } from "../lib/pet/actions";
+import { classifyDrag, type DragFeedback, type DragSample } from "../lib/pet/dragGesture";
 import { DEFAULT_SKIN, type SkinDef } from "../lib/pet/skins";
 import { MENU_ACTION_EVENT, MENU_BLUR_EVENT, MENU_EXPIRE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
@@ -168,7 +169,7 @@ async function syncBoardAtStartup() {
  *  正在播一次性动作时被引擎拒绝——其 onSettle 会再调一次，届时自然落到最新状态。
  *  flick = 模式硬切的淡出淡入兜底（换常驻来自不同动作族、无过渡帧可衔接）。 */
 async function applyChassis(flick = false) {
-  if (phase.value !== "normal") return;
+  if (phase.value !== "normal" || drag) return; // 拖拽中反馈动作归拖拽，常驻等松手
   const target = chassisAnim(mode.value, await mainBoardVisible());
   if (sprite.anim === target && engine.state().busy) return; // 常驻已在播且未变
   engine.request(chassisAction(target, flick));
@@ -445,7 +446,11 @@ let drag: {
   unitH: number; // 组合体（桌宠∪看板；未挂靠 = 桌宠矩形）起点与尺寸
   factor: number;
   moved: boolean;
+  samples: DragSample[]; // 拖拽反馈的滑动采样（140ms 窗口主方向判定，工单 18）
 } | null = null;
+
+/** 当前拖拽反馈动作（工单 18）：null = 尚未起拖；变化才换动作（实时跟切、模糊保持） */
+let dragAnim: DragFeedback | null = null;
 
 /** 组合体矩形 = 桌宠 ∪ 小看板（挂靠时）；返回拖拽起点全套几何 */
 function unitOrigin(petX: number, petY: number, petW: number, petH: number) {
@@ -497,6 +502,7 @@ function onPointerDown(e: PointerEvent) {
     winY: p.y,
     factor: mover.scaleFactor?.() ?? 1,
     moved: false,
+    samples: [{ t: e.timeStamp, x: e.screenX, y: e.screenY }],
     ...unitOrigin(p.x, p.y, s.width, s.height),
   };
   // 浮层代数预定：本次点击若将亮出浮层（右键=菜单、休息左键=气泡），按下就占用新一
@@ -508,13 +514,21 @@ function onPointerDown(e: PointerEvent) {
 function onPointerMove(e: PointerEvent) {
   const d = drag;
   if (!d || !mover) return;
+  const sample: DragSample = { t: e.timeStamp, x: e.screenX, y: e.screenY };
+  d.samples.push(sample);
+  // 采样窗口只保留最近 ~1s（防长拖内存增长；140ms 判定窗口之外的历史无用）
+  if (d.samples.length > 64) d.samples.splice(0, d.samples.length - 64);
   const dx = (e.screenX - d.px) * d.factor; // screenX 是逻辑像素 → 物理位移
   const dy = (e.screenY - d.py) * d.factor;
   if (!d.moved) {
     if (Math.abs(dx) <= CLICK_SLOP_PX && Math.abs(dy) <= CLICK_SLOP_PX) return;
     d.moved = true;
+    if (d.btn === 2) startDragFeedback(); // 拖起瞬间 jumping（被提起的反应，工单 18）
   }
   if (d.btn !== 2) return; // 左键拖动不移动桌宠（2026-08-30 反馈：移动归右键），位移只作点击判定
+  // 拖拽反馈：140ms 滑窗主方向（水平实时跟切反转 / 竖直 jumping / 轴向模糊保持当前）
+  const fb = classifyDrag(d.samples, sample.t);
+  if (fb && fb !== dragAnim) setDragFeedback(fb);
   // PetDragBounds 约束 1/2/3 按**组合体**（未挂靠 = 桌宠单体）矩形：跨屏重叠面积选屏 +
   // 钳进工作区。刚性：一个成员被边界挡住，全体一起停（相对位置固定，2026-08-29 反馈）
   const landing = clampDragPosition(d.unitX + dx, d.unitY + dy, d.unitW, d.unitH, monitorsSnapshot());
@@ -522,6 +536,19 @@ function onPointerMove(e: PointerEvent) {
   const ay = landing.y - d.unitY;
   mover.moveTo(d.winX + ax, d.winY + ay);
   placeBoardRaw(d.boardX + ax, d.boardY + ay);
+}
+
+/** 拖起（工单 18）：jumping 循环占住反馈位（用户动作：即刻稳态、可被方向实时替换、
+ *  可抢占在播的一次性系统动作——拖拽是最强用户输入） */
+function startDragFeedback() {
+  dragAnim = "jumping";
+  engine.request(dragLoopAction(dragAnim));
+}
+
+/** 方向切换：只在判定变化时换（反转实时跟切；模糊 null 保持当前不抖动） */
+function setDragFeedback(fb: DragFeedback) {
+  dragAnim = fb;
+  engine.request(dragLoopAction(fb));
 }
 
 function onPointerUp() {
@@ -543,7 +570,7 @@ function onPointerUp() {
   const seq = reservedSeq;
   reservedSeq = 0; // 拖拽不亮浮层：按下时的预定作废
   if (seq) void hideWindow("pet-menu"); // 预定过浮层（右键/休息左键）却拖走了：桌宠挪位，浮层一并收起
-  if (d.btn !== 2) return; // 左键拖动：无动作（不吸附、不移动、无拖后动作）
+  if (d.btn !== 2) return; // 左键拖动：无动作（不吸附、不移动）
   // PetDragBounds 约束 4：组合体贴近工作区边（<20px 逻辑）吸附最近边，增量同样刚性
   const appliedX = mover.position().x - d.winX;
   const appliedY = mover.position().y - d.winY;
@@ -560,6 +587,11 @@ function onPointerUp() {
   const ay = snapped.y - d.unitY;
   mover.moveTo(d.winX + ax, d.winY + ay);
   placeBoardRaw(d.boardX + ax, d.boardY + ay);
+  // 松手立即回常驻、无任何后续编排（工单 18：拖后 Attack 废除）；随机计时从用户动作
+  // 结束重排（休息模式）
+  dragAnim = null;
+  void applyChassis();
+  if (mode.value === "rest") armRandom();
 }
 
 /** 右键：亮出菜单形态（设定式——已开着就原样重亮，关闭靠失焦或点菜单项） */

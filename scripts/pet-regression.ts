@@ -18,11 +18,13 @@ import { PetEngine, type PetMover } from "../src/lib/pet/engine";
 import { ANIMATIONS } from "../src/lib/pet/animations";
 import {
   chassisAnim,
+  dragLoopAction,
   jumpSteps,
   pickRandomKind,
   planRoam,
   reviewSteps,
 } from "../src/lib/pet/actions";
+import { classifyDrag } from "../src/lib/pet/dragGesture";
 
 /* ---- rAF 桩：手动推进，全确定性 ---- */
 let rafQ: Array<(t: number) => void> = [];
@@ -339,6 +341,39 @@ check(
 );
 // 情况：完全无空间（工作区仅比窗宽 4px，已在极值位）。正确：降级为 null（调用方改跳跃）。
 check("无空间：降级 null", planRoam(0, 96, { x: 0, width: 100 }, 1, 0.5) === null);
+
+/* ================= dragGesture：140ms 滑窗主方向（工单 18） ================= */
+console.log("\n[dragGesture]");
+// 情况：窗口内首尾位移主水平右/左。正确：running-right / running-left。
+check(
+  "水平右 → running-right",
+  classifyDrag([{ t: 0, x: 100, y: 100 }, { t: 140, x: 240, y: 100 }], 140) === "running-right",
+);
+check(
+  "水平左 → running-left",
+  classifyDrag([{ t: 0, x: 240, y: 100 }, { t: 100, x: 100, y: 96 }], 100) === "running-left",
+);
+// 情况：主竖直（|dy| > |dx|×1.12）。正确：jumping（被提起/竖直拖）。
+check("竖直 → jumping", classifyDrag([{ t: 0, x: 100, y: 100 }, { t: 100, x: 110, y: 300 }], 100) === "jumping");
+// 情况：斜向 45°（两轴偏差比 1 < 1.12）。正确：null 保持当前动作不抖动。
+check("斜向模糊 → null", classifyDrag([{ t: 0, x: 100, y: 100 }, { t: 100, x: 200, y: 200 }], 100) === null);
+// 情况：右拖后中途反转回左（反转段在窗口内、最初向右样本已滑出）。正确：净位移向左
+// → running-left（实时跟切）。
+check(
+  "中途反转 → 跟切 running-left",
+  classifyDrag([{ t: 0, x: 100, y: 100 }, { t: 60, x: 200, y: 100 }, { t: 150, x: 140, y: 100 }], 150) === "running-left",
+);
+// 情况：老样本滑出 140ms 窗口（曾向右、现停住）。正确：窗口内位移不足 → null（保持）。
+check(
+  "窗口外样本淘汰 → null",
+  classifyDrag([{ t: 0, x: 100, y: 100 }, { t: 60, x: 300, y: 100 }, { t: 400, x: 302, y: 100 }], 400) === null,
+);
+// 情况：窗口内只有一个样本（刚起拖）。正确：null（无位移可判）。
+check("单样本 → null", classifyDrag([{ t: 100, x: 100, y: 100 }], 120) === null);
+
+// 情况：拖拽反馈循环动作构建。正确：用户锁 + 单循环步（即刻稳态 → 方向实时可替换）。
+const dl = dragLoopAction("running-left");
+check("拖拽反馈 = 用户锁循环", dl.lock && dl.steps.length === 1 && dl.steps[0].anim === "running-left" && (dl.steps[0].loop ?? false));
 
 /* ================= 汇总 ================= */
 console.log(failed === 0 ? "\n全部通过" : `\n${failed} 项失败`);
