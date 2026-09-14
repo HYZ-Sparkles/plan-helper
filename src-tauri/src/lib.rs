@@ -73,6 +73,8 @@ pub fn run() {
             commands::should_auto_open_main_board,
             commands::today_tasks_all_complete,
             commands::get_cursor_pos,
+            commands::get_pref,
+            commands::set_pref,
             commands::is_work_time,
             commands::save_settings,
             commands::get_next_window_start,

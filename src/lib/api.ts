@@ -80,6 +80,16 @@ export function getCursorPos(): Promise<[number, number] | null> {
   return invoke<[number, number] | null>("get_cursor_pos");
 }
 
+/** 读一条界面偏好（工单 22）：无此键 null（调用方回落默认值）。桌宠形象键 = "pet-skin" */
+export function getPref(key: string): Promise<string | null> {
+  return invoke<string | null>("get_pref", { key });
+}
+
+/** 写一条界面偏好（工单 22）：覆盖式，无生效时机语义（区别于 saveSettings） */
+export function setPref(key: string, value: string): Promise<void> {
+  return invoke<void>("set_pref", { key, value });
+}
+
 /* ---- 计划领域（工单 02+）---- */
 
 /** 优先级枚举（CONTEXT「优先级」） */

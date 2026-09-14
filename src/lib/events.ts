@@ -26,3 +26,6 @@ export const MAIN_BOARD_VISIBILITY_EVENT = "main-board:visibility";
 export const PET_MILESTONE_EVENT = "pet:milestone";
 /** 里程碑种类（waiting 为面板开关驱动，不在此列——它是常驻替换不是一次性演出） */
 export type MilestoneKind = "review" | "failed" | "celebrate";
+/** 桌宠形象切换（工单 22）：设置页「桌宠偏好」选择即发 {slug}（getPref/setPref 已
+ *  落库，事件只负责让桌宠窗口即时换装——帧网格同构，常驻动画就地换不重播生命周期） */
+export const PET_SKIN_CHANGED_EVENT = "pet:skin-changed";

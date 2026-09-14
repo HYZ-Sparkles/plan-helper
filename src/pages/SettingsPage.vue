@@ -110,12 +110,49 @@
         <p class="hint">每日差额向后续工作日均分的范围；改动立即生效</p>
       </div>
 
+      <div class="group">
+        <h3 class="group-title"><PhPawPrint :size="16" /> 桌宠偏好</h3>
+        <div class="skin-grid">
+          <button
+            v-for="s in SKINS"
+            :key="s.slug"
+            type="button"
+            class="skin-card"
+            :class="{ on: skinSlug === s.slug }"
+            @click="pickSkin(s.slug)"
+          >
+            <SkinPreview :skin="s" />
+            <span class="skin-name">{{ s.name }}</span>
+            <span class="skin-meta">v{{ s.spriteVersion }}{{ s.spriteVersion === 1 ? " · 无环视" : "" }}</span>
+          </button>
+        </div>
+        <p class="hint">形象切换立即生效并记忆（重启保持）；v1 形象无 16 向环视，休息模式的视线跟随自动关闭</p>
+      </div>
+
       <div class="actions">
         <button type="button" class="primary-btn" :disabled="saving" @click="save">
           {{ saving ? "保存中…" : "保存设置" }}
         </button>
         <span v-if="savedHint" class="saved">{{ savedHint }}</span>
         <span v-else-if="error" class="err">{{ error }}</span>
+      </div>
+
+      <div class="group about">
+        <h3 class="group-title"><PhInfo :size="16" /> 关于</h3>
+        <table class="attr">
+          <thead>
+            <tr><th>形象</th><th>作者</th><th>来源</th><th>许可</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="s in SKINS" :key="s.slug">
+              <td>{{ s.name }}</td>
+              <td><a :href="s.sourceUrl" target="_blank" rel="noreferrer">{{ s.author }}</a></td>
+              <td><a :href="SKIN_SOURCE_REPO" target="_blank" rel="noreferrer">awesome-codex-pet</a></td>
+              <td>{{ s.license }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p class="hint">形象遵循 codex 契约（9 标准动作 + v2 16 向环视，形象只是皮肤）；全部形象仅限个人非商业使用</p>
       </div>
     </template>
     <p v-else class="hint">正在读取设置……</p>
@@ -132,14 +169,18 @@ import {
   PhCalendarCheck,
   PhCalendarPlus,
   PhClock,
+  PhInfo,
+  PhPawPrint,
   PhPlus,
   PhX,
 } from "@phosphor-icons/vue";
-import { getAppState, saveSettings, type DateOverride, type Settings } from "../lib/api";
-import { MAIN_BOARD_REFRESH_EVENT, MINI_BOARD_REFRESH_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
+import { getAppState, getPref, saveSettings, setPref, type DateOverride, type Settings } from "../lib/api";
+import { MAIN_BOARD_REFRESH_EVENT, MINI_BOARD_REFRESH_EVENT, PET_SKIN_CHANGED_EVENT, SETTINGS_CHANGED_EVENT } from "../lib/events";
 import { planErrorMessage } from "../lib/labels";
 import { localToday } from "../lib/validation";
 import DatePicker from "../components/DatePicker.vue";
+import SkinPreview from "../components/pet/SkinPreview.vue";
+import { DEFAULT_SKIN, SKINS, SKIN_SOURCE_REPO, skinBySlug } from "../lib/pet/skins";
 
 /** 周一=1..周日=7 的展示名（周循环 chips 顺序） */
 const WEEKDAY_NAMES = ["一", "二", "三", "四", "五", "六", "日"];
@@ -159,6 +200,23 @@ const saving = ref(false);
 const error = ref("");
 const savedHint = ref("");
 
+/* ---- 桌宠形象（工单 22）：选择即生效（不走保存按钮）——落库 + 通知桌宠换装 ---- */
+
+/** 当前形象 slug：mount 读持久化值（无记录 = 注册表首项默认） */
+const skinSlug = ref(DEFAULT_SKIN.slug);
+
+/** 选形象：立即落库 + 发事件让桌宠就地换装（帧网格同构、常驻动画不重播生命周期） */
+async function pickSkin(slug: string) {
+  if (skinSlug.value === slug) return;
+  skinSlug.value = slug;
+  try {
+    await setPref("pet-skin", slug);
+    await emitTo("pet", PET_SKIN_CHANGED_EVENT, { slug });
+  } catch {
+    /* 后端不可达：本地选择保留（本次会话内选择器状态正确），下次进页面重读 */
+  }
+}
+
 /** 从服务端装载最新设置到表单（mount 首载与保存后回读共用——保存时服务端可能
  *  已合并时间窗口、或延时字段已过生效日，回读让编辑态始终所见即所存） */
 async function reload() {
@@ -175,7 +233,14 @@ async function reload() {
   loaded.value = true;
 }
 
-onMounted(reload);
+onMounted(async () => {
+  await reload();
+  try {
+    skinSlug.value = skinBySlug(await getPref("pet-skin")).slug;
+  } catch {
+    /* 后端不可达：保持默认形象 */
+  }
+});
 
 /** 切换一枚工作日 chip（已在集合中则移除，否则加入） */
 function toggleWorkday(day: number) {
@@ -370,6 +435,80 @@ async function save() {
   align-items: center;
   gap: 12px;
   margin-top: 4px;
+}
+
+/* ---- 桌宠偏好（工单 22）：9 宫格选择器，预览即实际尺寸的 idle 循环 ---- */
+.skin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 8px;
+}
+
+.skin-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 6px;
+  border: var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+  cursor: pointer;
+}
+
+.skin-card:hover {
+  border-color: var(--border-active);
+}
+
+.skin-card.on {
+  border-color: var(--primary);
+  background: var(--bg-accent-group);
+}
+
+.skin-card:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.skin-name {
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.skin-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ---- 关于（工单 22）：形象署名表（ADR-0010 授权决策落点） ---- */
+.about .attr {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.about .attr th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: 4px 10px 6px 0;
+  border-bottom: var(--border-default);
+}
+
+.about .attr td {
+  padding: 5px 10px 5px 0;
+  border-bottom: var(--border-default);
+  color: var(--text-primary);
+  vertical-align: top;
+}
+
+.about .attr a {
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.about .attr a:hover {
+  text-decoration: underline;
 }
 
 .saved {

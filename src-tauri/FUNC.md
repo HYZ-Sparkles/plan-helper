@@ -123,3 +123,4 @@
 - `force_settings(conn, &Settings)`（工单 13）— 把设置固定为"自从有设置以来一直如此"：直改存储（设置行 UPDATE + 例外全量替换 + 版本历史重置为生效日极早的种子）。`SettingsService::save` 的延时字段自下一个工作日生效，会把当日判定留在旧值——验收种子要的是"配置早已稳定"这条生产前提，必须走它而不是 save
 - 前置状态用 SQL 直改（`force_task_status`/`force_plan_status`/`force_subgoal_completed`/`force_pause_reason`）：汇报与状态机接线前的种子；pause_reason 种子供工单 11 总结的"已被抢占暂停"标注与工单 12 抢占路径
 - 每个测试注明：测试什么情况、什么结果才算正确（仓库规范）
+- 工单 16-22 桌宠 codex 契约（spec 69a / ADR-0010）：`today_tasks_all_complete() -> bool` — 今日任务全部完成判定（domain::allocation `today_all_complete`：今日已分配且非空且全部为未删除 Completed；seam_allocation 有五态覆盖）——工单 20 庆祝触发源；`get_cursor_pos() -> Option<(i32,i32)>` — 全局指针物理坐标（Win32 GetCursorPos 原生 FFI、非 Windows 返 None 前端静默回落）——工单 21 v2 环视轮询；`get_pref(key) -> Option<String>` / `set_pref(key, value)` — 界面偏好 KV（schema 新增 `app_prefs` 表；与带版本语义的 settings 分开，读写即所得）——工单 22 桌宠形象持久化（键 `pet-skin`）。`exit_app` 语义更新：桌宠窗口先淡出（前端 280ms CSS）再调用，无告别动画

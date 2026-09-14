@@ -131,4 +131,11 @@ CREATE TABLE IF NOT EXISTS summary_shown (
     date     TEXT PRIMARY KEY,            -- 总结归属日 YYYY-MM-DD（只弹一次的登记，工单 11）
     shown_at TEXT NOT NULL                -- 弹出时刻（RFC3339）
 );
+
+-- 界面偏好 KV（工单 22）：桌宠形象选择等前端持久化项。与带版本语义的 settings 表
+-- 分开——偏好无生效时机、无历史，读写即所得。
+CREATE TABLE IF NOT EXISTS app_prefs (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 ";

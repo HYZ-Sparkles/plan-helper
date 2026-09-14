@@ -56,12 +56,12 @@ import {
 } from "../lib/pet/actions";
 import { classifyDrag, type DragFeedback, type DragSample } from "../lib/pet/dragGesture";
 import { GAZE_DEADZONE_PX, lookIndex } from "../lib/pet/gaze";
-import { DEFAULT_SKIN, type SkinDef } from "../lib/pet/skins";
+import { DEFAULT_SKIN, skinBySlug, type SkinDef } from "../lib/pet/skins";
 import { MENU_ACTION_EVENT, MENU_BLUR_EVENT, MENU_EXPIRE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
-import { MAIN_BOARD_REOPEN_EVENT, MAIN_BOARD_VISIBILITY_EVENT, MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, PET_MILESTONE_EVENT, SETTINGS_CHANGED_EVENT, type MilestoneKind } from "../lib/events";
-import { exitApp, getCursorPos, getDailySummaryStatus, getMiniBoard, getNextWindowStart, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
+import { MAIN_BOARD_REOPEN_EVENT, MAIN_BOARD_VISIBILITY_EVENT, MINI_BOARD_DISMISS_EVENT, MINI_BOARD_REFRESH_EVENT, MINI_BOARD_SHOW_EVENT, PET_MILESTONE_EVENT, PET_SKIN_CHANGED_EVENT, SETTINGS_CHANGED_EVENT, type MilestoneKind } from "../lib/events";
+import { exitApp, getCursorPos, getDailySummaryStatus, getMiniBoard, getNextWindowStart, getPref, isWorkTime, shouldAutoOpenMainBoard } from "../lib/api";
 
 /** 判定为"点击"的最大位移（逻辑像素，小于它不算拖拽） */
 const CLICK_SLOP_PX = 4;
@@ -126,6 +126,13 @@ onMounted(async () => {
   engine.setMover((mover = await createTauriMover()));
   homeX = mover.position().x; // 自主移动的往返锚 = 启动落位（拖拽落手会重置）
   void syncBoardAtStartup();
+  // 形象持久化（工单 22）：上次选择（无记录 = 注册表首项默认；waving 已开播，
+  // 图集加载完成前停在首帧，不重播启动序列）
+  try {
+    skin.value = skinBySlug(await getPref("pet-skin"));
+  } catch {
+    /* 后端不可达：保持默认形象 */
+  }
   // 今日总结触发接线（工单 11，DailySummaryTrigger）：桌宠窗口是常驻心跳，
   // 定时排程放这里（启动补登检查 + 最晚窗口结束的定时触发，与动画序列无关）
   void armDailySummary();
@@ -177,6 +184,13 @@ onMounted(async () => {
   // 业务里程碑（工单 20，PetActionPolicy 第 4 来源）：小看板推进型汇报 review /
   // 总结弹出未达标 failed / 今日任务全部完成庆祝——密集合并反馈不排队
   await listen<{ kind: MilestoneKind }>(PET_MILESTONE_EVENT, (e) => onMilestone(e.payload.kind));
+  // 形象切换（工单 22）：帧网格同构 → 换 sheet URL 即换装，常驻动画就地继续、
+  // 生命周期不重播；正在播的一次性动作也不中断（换装只换皮肤，播完照常结算）。
+  // v1/v2 能力差异随选——环视轮询起停
+  await listen<{ slug: string }>(PET_SKIN_CHANGED_EVENT, (e) => {
+    skin.value = skinBySlug(e.payload.slug);
+    syncGazePoll();
+  });
 });
 
 /** 启动时对小看板（Rust 侧已按"工作时间 + 有当前任务"决定显隐）：缓存几何并对齐挂靠
