@@ -21,6 +21,7 @@ import {
   dragLoopAction,
   jumpSteps,
   pickRandomKind,
+  planReturn,
   planRoam,
   reviewSteps,
 } from "../src/lib/pet/actions";
@@ -341,6 +342,23 @@ check(
 );
 // 情况：完全无空间（工作区仅比窗宽 4px，已在极值位）。正确：降级为 null（调用方改跳跃）。
 check("无空间：降级 null", planRoam(0, 96, { x: 0, width: 100 }, 1, 0.5) === null);
+
+// 情况：away → home 回程（fromX=250、home=100）。正确：朝左 running-left 专行、
+// 距离 = |home-from|、落点 = home。
+const back = planReturn(250, 100, area, 96, 1);
+check(
+  "回程朝左专行带位移",
+  back !== null && back.step.anim === "running-left" && back.step.movement?.direction === "left" &&
+    back.step.movement?.distance === 150 && back.targetX === 100,
+);
+// 情况：home 落在当前工作区外（显示器拓扑变了）。正确：目标钳进工作区、方向按钳后落点。
+const backClamped = planReturn(600, 900, area, 96, 1);
+check(
+  "回程目标钳进工作区",
+  backClamped !== null && backClamped.targetX === 544 && backClamped.step.anim === "running-left",
+);
+// 情况：已在目标点。正确：null（无事可做）。
+check("回程已在 home → null", planReturn(100, 100, area, 96, 1) === null);
 
 /* ================= dragGesture：140ms 滑窗主方向（工单 18） ================= */
 console.log("\n[dragGesture]");

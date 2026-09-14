@@ -88,6 +88,29 @@ export function planRoam(
   };
 }
 
+/** 规划跑向指定点（纯函数，回归覆盖）：away → home 的回程用——目标钳进当前工作区
+ *  （显示器拓扑可能已变），位移方向 = 落点方向；已在目标点返回 null。 */
+export function planReturn(
+  fromX: number,
+  targetX: number,
+  area: { x: number; width: number },
+  winW: number,
+  factor: number,
+): RoamPlan | null {
+  const target = Math.min(Math.max(targetX, area.x), area.x + area.width - winW);
+  const dx = target - fromX;
+  if (Math.abs(dx) < 1) return null;
+  const direction = dx > 0 ? "right" : "left";
+  return {
+    step: {
+      anim: direction === "right" ? "running-right" : "running-left",
+      loop: false,
+      movement: { direction, distance: Math.abs(dx) / factor },
+    },
+    targetX: target,
+  };
+}
+
 /* ---- 业务里程碑（工单 20，PetActionPolicy 第 4 来源；系统动作不占锁） ---- */
 
 /** review 演出遍数：契约一圈 1030ms × 2 ≈ spec"约 2.4s"（整圈数取最接近档） */

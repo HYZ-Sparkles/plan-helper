@@ -39,7 +39,18 @@ import PetSprite from "../components/PetSprite.vue";
 import { PetEngine, type EngineState, type PetMover } from "../lib/pet/engine";
 import { createTauriMover } from "../lib/pet/tauriMover";
 import { clampDragPosition, snapToEdges, type MonitorArea } from "../lib/pet/dragBounds";
-import { chassisAction, chassisAnim, dragLoopAction, jumpSteps, pickRandomKind, RANDOM_INTERVAL_MS } from "../lib/pet/actions";
+import {
+  chassisAction,
+  chassisAnim,
+  dragLoopAction,
+  jumpSteps,
+  pickRandomKind,
+  planReturn,
+  planRoam,
+  RANDOM_INTERVAL_MS,
+  RANDOM_PROBABILITY,
+  type RoamPlan,
+} from "../lib/pet/actions";
 import { classifyDrag, type DragFeedback, type DragSample } from "../lib/pet/dragGesture";
 import { DEFAULT_SKIN, type SkinDef } from "../lib/pet/skins";
 import { MENU_ACTION_EVENT, MENU_BLUR_EVENT, MENU_EXPIRE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
@@ -102,6 +113,7 @@ onMounted(async () => {
     /* 后端不可达保持默认工作 */
   }
   engine.setMover((mover = await createTauriMover()));
+  homeX = mover.position().x; // 自主移动的往返锚 = 启动落位（拖拽落手会重置）
   void syncBoardAtStartup();
   // 今日总结触发接线（工单 11，DailySummaryTrigger）：桌宠窗口是常驻心跳，
   // 定时排程放这里（启动补登检查 + 最晚窗口结束的定时触发，与动画序列无关）
@@ -314,32 +326,69 @@ async function attachBoardRigidly() {
   await emitTo("mini-board", MINI_BOARD_SHOW_EVENT);
 }
 
-/* ---- 随机动作调度（19，PetRandomAction）：距上一次动作结束 300s，50% 触发 ---- */
+/* ---- 随机动作调度（19，PetRandomAction）：距上一次（用户或随机）动作结束 300s 抽签，
+   ---- 50% 触发；池 = 跳跃 : 自主移动 = 1:1（home/away 交替往返） ---- */
 
-/** 重排计时：每个动作（用户或随机）的 onSettle 调一次；离开休息模式/再见的 gen 自增使旧计时自弃 */
+/** home 点（物理像素 X）：启动落位或最近一次拖拽落点——自主移动的往返锚。
+ *  拖拽即重置 home 并清除 away 态（位置控制权归用户，ADR-0010 修订节） */
+let homeX = 0;
+/** away 态：null = 在 home；非 null = 停在 away 点（下次触发跑回 home） */
+let awayX: number | null = null;
+
+/** 重排计时：每个动作（用户或随机）的 onSettle / 用户拖拽落手调一次；离开休息模式/
+ *  再见的 gen 自增使旧计时自弃 */
 function armRandom() {
   if (mode.value !== "rest" || phase.value !== "normal") return;
   const gen = ++randomGen;
   window.setTimeout(() => fireRandom(gen), RANDOM_INTERVAL_MS);
 }
 
-/** 触发时刻的守卫全量复查（计时期间模式/阶段可能已变）；被拒（过渡中）自愈重排。
- *  池子 1:1（跳跃 : 自主移动）——自主移动的 home/away 接线在工单 19，本单两类都先
- *  落跳跃（PetActionPolicy 白名单已含随机跳跃）。 */
+/** 触发时刻的守卫全量复查（计时期间模式/阶段/拖拽可能已变）→ 抽签：50% 保持 idle
+ *  下个间隔再抽；触发则按池 1:1 分流（被拒〔一次性动作播放中〕自愈重排） */
 function fireRandom(gen: number) {
   if (gen !== randomGen || mode.value !== "rest" || phase.value !== "normal" || drag || !mover) return;
-  pickRandomKind(Math.random()); // 抽签留痕（工单 19 接入移动池）
-  const ok = engine.request({
-    lock: false, // 系统随机动作不占锁
-    steps: jumpSteps(),
-    onSettle: () => applyChassisAfterRandom(),
-  });
+  if (Math.random() >= RANDOM_PROBABILITY) {
+    armRandom();
+    return;
+  }
+  const ok = pickRandomKind(Math.random()) === "roam" ? fireRoam() : fireJump();
   if (!ok) armRandom();
 }
 
+/** 随机跳跃（跳跃在 home/away 两态都可发生，不动位置） */
+function fireJump(): boolean {
+  return engine.request({
+    lock: false, // 系统随机动作不占锁
+    steps: jumpSteps(),
+    onSettle: onRandomSettled,
+  });
+}
+
+/** 自主移动：在 home → 跑出去（64~128px 随机、钳制 ≥20px 边距）**留在 away**；
+ *  在 away → 跑回 home。无足够空间降级为跳跃（不报错不越界）。
+ *  移动期间环视挂起点：环视只在常驻 idle 上显示（工单 21 接线，跑动动画天然排除） */
+function fireRoam(): boolean {
+  const s = mover!.size();
+  const factor = mover!.scaleFactor?.() ?? 1;
+  const fromX = mover!.position().x;
+  const goingHome = awayX != null;
+  const plan: RoamPlan | null = goingHome
+    ? planReturn(fromX, homeX, mover!.workArea(), s.width, factor)
+    : planRoam(fromX, s.width, mover!.workArea(), factor, Math.random());
+  if (!plan) return fireJump(); // 回程已在 home / 出程无空间：降级跳跃
+  return engine.request({
+    lock: false,
+    steps: [plan.step],
+    onSettle: () => {
+      awayX = goingHome ? null : plan.targetX; // 跑出留下；跑回归位
+      onRandomSettled();
+    },
+  });
+}
+
 /** 随机动作结束：回常驻并起下一轮计时（间隔从动作结束算起） */
-function applyChassisAfterRandom() {
-  applyChassis();
+function onRandomSettled() {
+  void applyChassis();
   armRandom();
 }
 
@@ -587,9 +636,12 @@ function onPointerUp() {
   const ay = snapped.y - d.unitY;
   mover.moveTo(d.winX + ax, d.winY + ay);
   placeBoardRaw(d.boardX + ax, d.boardY + ay);
-  // 松手立即回常驻、无任何后续编排（工单 18：拖后 Attack 废除）；随机计时从用户动作
-  // 结束重排（休息模式）
+  // 松手立即回常驻、无任何后续编排（工单 18：拖后 Attack 废除）；拖拽落点 = 新 home、
+  // 旧 away 作废（工单 19：位置控制权归用户；被拖拽抢占的自主移动也因此不欠账）；
+  // 随机计时从用户动作结束重排（休息模式）
   dragAnim = null;
+  homeX = mover.position().x;
+  awayX = null;
   void applyChassis();
   if (mode.value === "rest") armRandom();
 }
