@@ -18,3 +18,5 @@
 实现注记：切帧=契约固定 8 列网格查表（durations+前缀和 cum），PetWindow 过渡期保底（waving 启动→模式常驻、随机暂只接跳跃、拖拽无反馈、再见直接退出——17/18/19 逐单补完）；引擎机制成果（动作锁/flick/freeze/unfreeze/return 位移/rAF 单排）全保留并随 pet-regression.ts 回归。资产 public/pet/skins/*.webp（约 19.9MB，源 resourses/awesome-codex-pet）。
 
 审查修正（code-review-zh）：SHEET_SCALE 语义写反被 Spec 轴抓出（×2 导致渲染 384×416 塞不进 96×104 窗口）——改为 0.5（= ÷2 显示缩放），PET_WIN 修正为 96×104 且尺寸断言入回归。
+
+验收修订（2026-09-14 用户反馈）：渲染弃用 image-rendering: pixelated（Oreo 像素风遗产）改浏览器平滑插值——最近邻在 ÷2 缩放下逐帧抽取不同像素行，造成「动作帧突发变大变小」；窗口维持 96×104。另：形象注册表随验收收缩 9→7（Toothless/咕咚 删除）。

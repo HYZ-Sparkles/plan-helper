@@ -28,6 +28,7 @@ import {
 import { classifyDrag } from "../src/lib/pet/dragGesture";
 import { lookIndex } from "../src/lib/pet/gaze";
 import { lookCell, PET_WIN, SHEET_SCALE } from "../src/lib/pet/animations";
+import { DEFAULT_SKIN, SKINS, skinBySlug, skinCanGaze } from "../src/lib/pet/skins";
 
 /* ---- rAF 桩：手动推进，全确定性 ---- */
 let rafQ: Array<(t: number) => void> = [];
@@ -399,33 +400,57 @@ check("单样本 → null", classifyDrag([{ t: 100, x: 100, y: 100 }], 120) === 
 const dl = dragLoopAction("running-left");
 check("拖拽反馈 = 用户锁循环", dl.lock && dl.steps.length === 1 && dl.steps[0].anim === "running-left" && (dl.steps[0].loop ?? false));
 
-/* ================= gaze：16 向方位分档与死区（工单 21） ================= */
+/* ================= gaze：16 向分档、死区与激活半径（工单 21；2026-09-14 激活半径修订） ================= */
 console.log("\n[gaze]");
 // 情况：四正方向（dx/dy 为物理像素差，y 向下）。正确：上 0、右 4、下 8、左 12。
 check(
   "四正方向分档（上0/右4/下8/左12）",
-  lookIndex(0, -100, 64) === 0 &&
-    lookIndex(100, 0, 64) === 4 &&
-    lookIndex(0, 100, 64) === 8 &&
-    lookIndex(-100, 0, 64) === 12,
+  lookIndex(0, -100, 64, 240) === 0 &&
+    lookIndex(100, 0, 64, 240) === 4 &&
+    lookIndex(0, 100, 64, 240) === 8 &&
+    lookIndex(-100, 0, 64, 240) === 12,
 );
 // 情况：对角 45°。正确：右上 2、左下 10。
 check(
   "对角 45° 分档",
-  lookIndex(70.7, -70.7, 64) === 2 && lookIndex(-70.7, 70.7, 64) === 10,
+  lookIndex(70.7, -70.7, 64, 240) === 2 && lookIndex(-70.7, 70.7, 64, 240) === 10,
 );
 // 情况：11.25° 分档边界（0 与 1 档的分界角）。正确：11.09° → 0 档、11.54° → 1 档。
-check("22.5° 半角边界", lookIndex(19.6, -100, 64) === 0 && lookIndex(20.4, -100, 64) === 1);
+check("22.5° 半角边界", lookIndex(19.6, -100, 64, 240) === 0 && lookIndex(20.4, -100, 64, 240) === 1);
 // 情况：接近正上方的负角（-3°）。正确：归一到 357° → round 到 16 取模回 0 档（最近方向）。
-check("负角归一与取模回绕", lookIndex(-5.2, -100, 64) === 0);
+check("负角归一与取模回绕", lookIndex(-5.2, -100, 64, 240) === 0);
 // 情况：指针距中心不足死区（压在桌宠身上）。正确：null（正前方死区回落 idle）。
-check("死区内 → null", lookIndex(0, -63, 64) === null && lookIndex(30, -30, 64) === null);
-check("死区外起算", lookIndex(0, -65, 64) === 0);
+check("死区内 → null", lookIndex(0, -63, 64, 240) === null && lookIndex(30, -30, 64, 240) === null);
+check("死区外起算", lookIndex(0, -65, 64, 240) === 0);
+// 情况：激活半径边界（240 逻辑像素，2026-09-14 验收修订：靠近才跟视）。
+// 正确：239 在内起算、241 在外 → null（超出半径安静回 idle）。
+check("激活半径内起算", lookIndex(0, -239, 64, 240) === 0);
+check("激活半径外 → null", lookIndex(0, -241, 64, 240) === null && lookIndex(300, 0, 64, 240) === null);
 // 情况：环视序号 → 图集格。正确：0–7 在行 9、8–15 在行 10、列 = 序号模 8。
 check(
   "lookCell 行列映射",
   lookCell(0).row === 9 && lookCell(7).col === 7 && lookCell(8).row === 10 && lookCell(15).col === 7,
 );
+
+/* ================= skins：形象注册表（2026-09-14 验收收缩 9→7） ================= */
+console.log("[skins]");
+// 情况：验收收缩后的注册表。正确：7 个形象、默认 = 首项 Kiko、Toothless/咕咚已除名
+// （残留持久化选择回落默认）、邦德·福杰保留但环视被忽略、sheet 路径无重复。
+check("7 个形象（Toothless/咕咚已删）", SKINS.length === 7 && DEFAULT_SKIN.slug === "kiko--untko");
+check(
+  "已删形象的持久化选择回落默认",
+  skinBySlug("toothless--legeling") === DEFAULT_SKIN && skinBySlug("gudong--rank") === DEFAULT_SKIN,
+);
+check(
+  "邦德·福杰 = v2 但环视被忽略",
+  SKINS.find((s) => s.slug === "bond-forger--legeling")?.spriteVersion === 2 &&
+    skinCanGaze(skinBySlug("bond-forger--legeling")) === false,
+);
+check(
+  "环视能力 = v2 且未忽略",
+  skinCanGaze(DEFAULT_SKIN) === true && skinCanGaze(skinBySlug("doraemon--xueshi")) === false,
+);
+check("sheet 路径唯一", new Set(SKINS.map((s) => s.sheet)).size === SKINS.length);
 
 /* ================= 汇总 ================= */
 console.log(failed === 0 ? "\n全部通过" : `\n${failed} 项失败`);

@@ -18,3 +18,5 @@
 实现注记：偏好走 app_prefs KV 表（get_pref/set_pref 命令）+ PET_SKIN_PREF_KEY 常量共用；SkinPreview 组件按契约逐帧时长循环播 idle（实际尺寸、复用 PetSprite）；pickSkin = setPref 落库 + pet:skin-changed 事件（选择即生效不走保存按钮）；PetWindow 换装 = 换 sheet URL 就地继续（一次性动作不中断、播完照常结算），v1/v2 切换同步起停环视轮询；署名表落「关于」区（作者链作者页、来源链 awesome-codex-pet）。
 
 审查修正（code-review-zh Standards）：偏好存储下沉 infra::prefs（commands 薄代理，不内联 SQL）；"pet-skin" 魔法串收编 skins.ts 常量。
+
+验收修订（2026-09-14 用户反馈）：形象收缩 9→7——Toothless / 咕咚 删除（图效果不好），选择器与署名表随注册表自动变 7 条；邦德·福杰保留但忽略环视（选择它后环视自动关闭，gazeIgnored 标记）；已删形象的持久化选择经 skinBySlug 回落默认 Kiko（回归覆盖）。

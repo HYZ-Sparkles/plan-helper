@@ -1,8 +1,11 @@
 <script setup lang="ts">
 /**
  * 桌宠帧渲染器（工单 08 建立、16 改 codex 契约网格）：单张雪碧图按固定 8 列网格
- * 用 background-position 切帧——格 192×208、÷2 整数缩放（96×104，像素干净），
- * 每帧同尺寸同基线（契约保证，Oreo 的底部锚定/摆放微调不再需要）。
+ * 用 background-position 切帧——格 192×208、÷2 缩放（96×104），每帧同尺寸同基线
+ * （契约保证，Oreo 的底部锚定/摆放微调不再需要）。
+ * 缩放用**平滑插值**（不用 pixelated——2026-09-14 反馈：codex 素材是带抗锯齿的绘画
+ * 风，最近邻在 ÷2 缩放下逐帧抽取不同像素行，轮廓忽隐忽现看起来像帧忽大忽小；
+ * pixelated 是 Oreo 像素风的遗产）。
  * 形象 = sheet prop（skins.ts 注册表 URL），换装 = 换 URL，引擎状态不动。
  * look prop（0–15）= v2 环视静态姿势，非空时覆盖 anim/frame（工单 21）。
  * 硬切衔接（工单 09）：fadeSignal 计数变化时快速淡出→淡入一次，掩盖抢占产生的帧跳变。
@@ -54,7 +57,6 @@ const style = computed(() => ({
   backgroundImage: `url(${props.sheet})`,
   backgroundSize: `${GRID_COLS * CELL_W * SHEET_SCALE}px auto`,
   backgroundPosition: `${-cell.value.col * CELL_W * SHEET_SCALE}px ${-cell.value.row * CELL_H * SHEET_SCALE}px`,
-  imageRendering: "pixelated" as const,
 }));
 </script>
 

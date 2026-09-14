@@ -55,8 +55,8 @@ import {
   type RoamPlan,
 } from "../lib/pet/actions";
 import { classifyDrag, type DragFeedback, type DragSample } from "../lib/pet/dragGesture";
-import { GAZE_DEADZONE_PX, lookIndex } from "../lib/pet/gaze";
-import { DEFAULT_SKIN, PET_SKIN_PREF_KEY, skinBySlug, type SkinDef } from "../lib/pet/skins";
+import { GAZE_DEADZONE_PX, GAZE_RANGE_PX, lookIndex } from "../lib/pet/gaze";
+import { DEFAULT_SKIN, PET_SKIN_PREF_KEY, skinBySlug, skinCanGaze, type SkinDef } from "../lib/pet/skins";
 import { MENU_ACTION_EVENT, MENU_BLUR_EVENT, MENU_EXPIRE_EVENT, MENU_HINT_EVENT, MENU_OPEN_EVENT, MENU_STATE_EVENT, TRAY_EXIT_EVENT, type MenuAction, type PetMode } from "../lib/pet/menu";
 import { openDailySummaryWindow } from "../lib/summary";
 import { revealWindow } from "../lib/windows";
@@ -471,25 +471,27 @@ function goodbye() {
   window.setTimeout(() => void exitApp(), GOODBYE_FADE_MS);
 }
 
-/* ---- v2 环视跟随（21，CodexPetContract）：休息模式视线跟随指针，正前方死区回落
-   ---- idle；v1 形象无环视行自动静默降级（不轮询不报错）；随机移动/一次性演出/
-   ---- waiting/拖拽反馈期间挂起（sprite.anim 不是 idle 即挂起，跑完自然恢复） ---- */
+/* ---- v2 环视跟随（21，CodexPetContract；2026-09-14 验收修订为激活半径制）：指针
+   ---- 进入桌宠 240 逻辑像素内才跟视（超出/压正中回 idle，安静不注目靠近才互动）；
+   ---- 环视能力 = skinCanGaze（v1 无环视行、个别 v2 形象被显式忽略，静默降级）；
+   ---- 随机移动/一次性演出/waiting/拖拽反馈期间挂起（sprite.anim 不是 idle 即挂起，
+   ---- 跑完自然恢复） ---- */
 
-/** 当前环视姿势（0–15 顺时针、0 = 正上方；null = 死区/挂起 → 渲染回 anim/frame） */
+/** 当前环视姿势（0–15 顺时针、0 = 正上方；null = 死区/半径外/挂起 → 渲染回 anim/frame） */
 const gazeIdx = ref<number | null>(null);
 /** 轮询句柄：条件变化起停，clear 后 gazeIdx 立即回落 */
 let gazeTimer: ReturnType<typeof setInterval> | undefined;
 
-/** 起停：休息模式 + v2 形象 + 正常态才轮询（30Hz 读全局指针——桌宠窗口只有 96×104，
- *  指针大多在窗外，事件收不到，只能轮询；每次一问极小载荷） */
+/** 起停：休息模式 + 有环视能力的形象 + 正常态才轮询（30Hz 读全局指针——桌宠窗口
+ *  只有 96×104，指针大多在窗外，事件收不到，只能轮询；每次一问极小载荷） */
 function syncGazePoll() {
-  const on = mode.value === "rest" && skin.value.spriteVersion === 2 && phase.value === "normal";
+  const on = mode.value === "rest" && skinCanGaze(skin.value) && phase.value === "normal";
   if (on && gazeTimer === undefined) {
     gazeTimer = setInterval(() => void pollGaze(), 33);
   } else if (!on && gazeTimer !== undefined) {
     clearInterval(gazeTimer);
     gazeTimer = undefined;
-    gazeIdx.value = null; // 条件失效立即回落（工作模式/v1/告别），不等下一拍
+    gazeIdx.value = null; // 条件失效立即回落（工作模式/无能力形象/告别），不等下一拍
   }
 }
 
@@ -507,10 +509,12 @@ async function pollGaze() {
     }
     const p = mover.position();
     const s = mover.size();
+    const factor = mover.scaleFactor?.() ?? 1;
     gazeIdx.value = lookIndex(
       cur[0] - (p.x + s.width / 2),
       cur[1] - (p.y + s.height / 2),
-      GAZE_DEADZONE_PX * (mover.scaleFactor?.() ?? 1),
+      GAZE_DEADZONE_PX * factor,
+      GAZE_RANGE_PX * factor,
     );
   } catch {
     gazeIdx.value = null; // 后端不可达：静默回落

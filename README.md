@@ -115,8 +115,6 @@ npm run tauri dev
 - salary-cat--Zuochunjie
 - bond-forger--legeling
 - doraemon--xueshi
-- gudong--rank
-- toothless--legeling
 - anya--chenxin-dlut
 - kid-goku--julianhuang
 - koukou-penguin--hoody
@@ -128,7 +126,7 @@ npm run tauri dev
   - 每5min概率性(50%)触发随机动作：
     - 跳跃：jumping
     - 自行移动：在桌面上小范围移动 running-right/running-left，一次移动到其他位置之后，下一次移动回来原位置
-  - v2版本 跟着鼠标环视16方向
+  - v2版本：在跟着鼠标环视16方向
 - 工作模式：running
   - 小面板完成一个子目标或者推进了任务进度：review
 - 鼠标拖动：running-right/running-left，对应不同方向的拖动

@@ -15,3 +15,5 @@
 - [x] 手动验收：v2 与 v1 形象各测一轮（设置页切换或临时改默认形象；若工单 22 未落地可临时指定）
 
 实现注记：lookIndex 纯函数（atan2(dx,-dy) 22.5° 顺时针分档、死区 64 逻辑 px ×scaleFactor、负角归一回绕，回归覆盖四正/对角/半角边界/死区/lookCell 行列）；Rust get_cursor_pos（Win32 GetCursorPos 原生 FFI、非 Windows null 静默）；PetWindow syncGazePoll 起停（休息+v2+正常态 30Hz 轮询——窗只有 96×104 指针大多在窗外）、pollGaze 条件复查挂起（拖拽中/sprite.anim 非 idle——随机移动、里程碑、waiting 期间天然排除，跑完恢复，与 19 的挂起点按此接线）。
+
+验收修订（2026-09-14 用户反馈）：环视改**激活半径制**——指针进入桌宠约 240 逻辑像素内才跟视（GAZE_RANGE_PX），超出或压正中（死区 64）回 idle，安静不注目、靠近才互动；环视能力改由 skinCanGaze 裁决（v1 无环视行；个别 v2 形象被显式忽略——邦德·福杰转向效果不好）。回归补激活半径边界用例。

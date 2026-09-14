@@ -123,10 +123,10 @@
           >
             <SkinPreview :skin="s" />
             <span class="skin-name">{{ s.name }}</span>
-            <span class="skin-meta">v{{ s.spriteVersion }}{{ s.spriteVersion === 1 ? " · 无环视" : "" }}</span>
+            <span class="skin-meta">v{{ s.spriteVersion }}{{ skinCanGaze(s) ? "" : " · 无环视" }}</span>
           </button>
         </div>
-        <p class="hint">形象切换立即生效并记忆（重启保持）；v1 形象无 16 向环视，休息模式的视线跟随自动关闭</p>
+        <p class="hint">形象切换立即生效并记忆（重启保持）；「无环视」= 休息模式不跟随鼠标视线（v1 形象无环视行；个别 v2 形象转向效果不好被忽略）</p>
       </div>
 
       <div class="actions">
@@ -180,7 +180,7 @@ import { planErrorMessage } from "../lib/labels";
 import { localToday } from "../lib/validation";
 import DatePicker from "../components/DatePicker.vue";
 import SkinPreview from "../components/pet/SkinPreview.vue";
-import { DEFAULT_SKIN, PET_SKIN_PREF_KEY, SKINS, SKIN_SOURCE_REPO, skinBySlug } from "../lib/pet/skins";
+import { DEFAULT_SKIN, PET_SKIN_PREF_KEY, SKINS, SKIN_SOURCE_REPO, skinBySlug, skinCanGaze } from "../lib/pet/skins";
 
 /** 周一=1..周日=7 的展示名（周循环 chips 顺序） */
 const WEEKDAY_NAMES = ["一", "二", "三", "四", "五", "六", "日"];

@@ -12,7 +12,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import PetSprite from "../components/PetSprite.vue";
 import { ANIMATIONS, LOOK_DIRECTIONS, PET_WIN, type PetAnim } from "../lib/pet/animations";
-import { SKINS, DEFAULT_SKIN } from "../lib/pet/skins";
+import { SKINS, DEFAULT_SKIN, skinCanGaze } from "../lib/pet/skins";
 import { PetEngine, type EngineState, type PetMover } from "../lib/pet/engine";
 import { PhCaretLeft, PhCaretRight } from "@phosphor-icons/vue";
 
@@ -27,7 +27,8 @@ const animKeys = Object.keys(ANIMATIONS) as PetAnim[];
 const sel = ref<PetAnim>("idle");
 const def = computed(() => ANIMATIONS[sel.value]);
 const lookSel = ref<number | null>(null); // 非空 = 平铺选中环视姿势（覆盖动作区）
-const showLook = computed(() => skin.value.spriteVersion === 2);
+/** 环视区段只对有环视能力的形象展开（v1 无行；个别 v2 形象被显式忽略——2026-09-14 验收） */
+const showLook = computed(() => skinCanGaze(skin.value));
 
 /** 帧累计时间轴读数（如 "0 / 280 / 390 ms"）：契约时长可查 */
 const timeline = computed(() => def.value.cum.slice(0, -1));
@@ -226,7 +227,7 @@ const ANIM_LABELS: Record<PetAnim, string> = {
             </div>
           </div>
         </template>
-        <p v-else class="muted">v1 形象无环视行（16 向视线跟随自动降级，工单 21）</p>
+        <p v-else class="muted">该形象无环视能力（v1 无环视行，或 v2 转向被忽略）——16 向视线跟随自动关闭</p>
       </section>
     </div>
   </div>
